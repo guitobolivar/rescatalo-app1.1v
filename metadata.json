@@ -1,0 +1,6 @@
+{
+  "name": "Rescátalo - Delivery & Movilidad Venezuela",
+  "description": "Servicio de delivery y envíos rápidos al estilo Yummy/Ridery optimizado para Venezuela con tarifas en USD y seguimiento en tiempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
