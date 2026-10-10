@@ -1,9 +1,6 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
 import { useApp } from '../context/AppContext';
-import { UserRole } from '../types';
+import { UserRole, isDriverRole, isClientRole } from '../types';
 import { RescataloLogo } from './RescataloLogo';
 import {
   User,
@@ -29,7 +26,7 @@ export const AuthScreen: React.FC = () => {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('Usuario Normal');
+  const [role, setRole] = useState<UserRole>('client');
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -78,7 +75,7 @@ export const AuthScreen: React.FC = () => {
         setLoading(false);
         return;
       }
-      const res = login(email, password);
+      const res = await login(email, password);
       if (!res.success) {
         setErrorMsg(res.message || 'Error al iniciar sesión.');
       } else {
@@ -105,7 +102,7 @@ export const AuthScreen: React.FC = () => {
         return;
       }
 
-      if (role === 'Repartidor' && (!vehicleModel.trim() || !vehiclePlate.trim())) {
+      if (isDriverRole(role) && (!vehicleModel.trim() || !vehiclePlate.trim())) {
         setErrorMsg('Debes ingresar el modelo y placa del vehículo para repartidores.');
         setLoading(false);
         return;
@@ -114,35 +111,7 @@ export const AuthScreen: React.FC = () => {
       const cleanPhone = phone.trim().replace(/^\+58\s*/, '');
       const formattedPhone = `+58 ${cleanPhone}`;
 
-      // Ejecutar registro con Firebase Authentication y Firestore
-      try {
-        const userCredential = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-        const user = userCredential.user;
-
-        // Guardar documento en colección 'users' de Firestore
-        await setDoc(doc(db, 'users', user.uid), {
-          uid: user.uid,
-          name: name.trim(),
-          email: email.trim().toLowerCase(),
-          role: role,
-          cedula: cedula.trim(),
-          phone: formattedPhone,
-          vehicle:
-            role === 'Repartidor'
-              ? {
-                  type: 'Moto',
-                  model: vehicleModel.trim() || 'Moto Keeway 150',
-                  plate: vehiclePlate.trim().toUpperCase() || 'AB0-00X',
-                  color: 'Negro / Azul',
-                }
-              : null,
-          createdAt: new Date().toISOString(),
-        });
-
-        console.log('¡Usuario registrado con éxito en Firebase!', user.uid);
-      } catch (fbError: any) {
-        console.error('Error al registrar en Firebase:', fbError);
-      }
+      const finalRole = isDriverRole(role) ? 'driver' : 'client';
 
       const res = await register({
         name: name.trim(),
@@ -150,9 +119,9 @@ export const AuthScreen: React.FC = () => {
         phone: formattedPhone,
         email: email.trim().toLowerCase(),
         password,
-        role,
+        role: finalRole,
         vehicle:
-          role === 'Repartidor'
+          isDriverRole(role)
             ? {
                 type: 'Moto',
                 model: vehicleModel.trim() || 'Moto Keeway 150',
@@ -305,46 +274,46 @@ export const AuthScreen: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
                     type="button"
-                    onClick={() => setRole('Usuario Normal')}
+                    onClick={() => setRole('client')}
                     className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                      role === 'Usuario Normal'
+                      isClientRole(role)
                         ? 'border-cyan-400 bg-cyan-950/70 text-white shadow-md shadow-cyan-950/40 ring-1 ring-cyan-400'
                         : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <User className={`w-4 h-4 ${role === 'Usuario Normal' ? 'text-cyan-400' : 'text-slate-400'}`} />
-                      {role === 'Usuario Normal' && (
+                      <User className={`w-4 h-4 ${isClientRole(role) ? 'text-cyan-400' : 'text-slate-400'}`} />
+                      {isClientRole(role) && (
                         <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
                       )}
                     </div>
-                    <span className="text-xs font-black text-white">Usuario Normal</span>
+                    <span className="text-xs font-black text-white">Cliente ('client')</span>
                     <span className="text-[11px] text-slate-400 leading-tight">Pedir delivery</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setRole('Repartidor')}
+                    onClick={() => setRole('driver')}
                     className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                      role === 'Repartidor'
+                      isDriverRole(role)
                         ? 'border-blue-400 bg-blue-950/70 text-white shadow-md shadow-blue-950/40 ring-1 ring-blue-400'
                         : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <Bike className={`w-4 h-4 ${role === 'Repartidor' ? 'text-blue-400' : 'text-slate-400'}`} />
-                      {role === 'Repartidor' && (
+                      <Bike className={`w-4 h-4 ${isDriverRole(role) ? 'text-blue-400' : 'text-slate-400'}`} />
+                      {isDriverRole(role) && (
                         <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
                       )}
                     </div>
-                    <span className="text-xs font-black text-white">Repartidor</span>
+                    <span className="text-xs font-black text-white">Repartidor ('driver')</span>
                     <span className="text-[11px] text-slate-400 leading-tight">Hacer entregas</span>
                   </button>
                 </div>
               </div>
 
               {/* Vehicle data if Repartidor */}
-              {role === 'Repartidor' && (
+              {isDriverRole(role) && (
                 <div className="p-3.5 rounded-2xl bg-slate-950 border border-blue-500/30 space-y-3">
                   <span className="text-xs font-black text-blue-400 uppercase tracking-wide block">
                     Datos del Vehículo:

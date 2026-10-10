@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { InteractiveMap } from './InteractiveMap';
 import { ChatDrawer } from './ChatDrawer';
-import { Order, OrderStatus } from '../types';
+import { Order, OrderStatus, isDriverRole } from '../types';
 import { buildWhatsAppLink, getDriverPerformance } from '../data/venezuelaData';
 import { MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
 import { CancelOrderModal } from './CancelOrderModal';
@@ -79,7 +79,7 @@ export const DriverDashboard: React.FC = () => {
       (o) =>
         (o.driverId === currentUser?.id ||
           (!currentUser?.id && o.driverId === 'user-carlos-repartidor') ||
-          (currentUser?.role === 'Repartidor' && o.driverId === currentUser.id)) &&
+          (isDriverRole(currentUser?.role) && o.driverId === currentUser?.id)) &&
         o.status !== 'Buscando repartidor' &&
         o.status !== 'Entregado' &&
         o.status !== 'Cancelado'

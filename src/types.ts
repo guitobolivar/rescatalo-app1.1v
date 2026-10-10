@@ -1,4 +1,30 @@
-export type UserRole = 'Usuario Normal' | 'Repartidor';
+export type UserRole = 'client' | 'driver' | 'admin' | 'Usuario Normal' | 'Repartidor' | 'Moderador';
+
+export const isClientRole = (role?: string | null): boolean => {
+  if (!role) return true;
+  const r = role.toLowerCase().trim();
+  return r === 'client' || r === 'usuario normal' || r === 'cliente';
+};
+
+export const isDriverRole = (role?: string | null): boolean => {
+  if (!role) return false;
+  const r = role.toLowerCase().trim();
+  return r === 'driver' || r === 'repartidor';
+};
+
+export const isAdminRole = (role?: string | null): boolean => {
+  if (!role) return false;
+  const r = role.toLowerCase().trim();
+  return r === 'admin' || r === 'moderador';
+};
+
+export const normalizeRole = (role?: string | null): 'client' | 'driver' | 'admin' => {
+  if (!role) return 'client';
+  if (isAdminRole(role)) return 'admin';
+  if (isDriverRole(role)) return 'driver';
+  return 'client';
+};
+
 export type UserStatus = 'Activo' | 'Suspendido';
 
 export type PerformanceTier = 'green' | 'yellow' | 'red';
@@ -15,25 +41,25 @@ export interface DriverStats {
 export interface User {
   id: string;
   name: string;
-  cedula?: string;
+  cedula?: string | null;
   phone: string;
   email: string;
   password?: string;
   role: UserRole;
   status?: UserStatus;
-  suspendedReason?: string;
-  avatar?: string;
-  rating?: number;
-  ratingsCount?: number;
-  ratingSum?: number;
-  driverStats?: DriverStats;
-  lastProfileUpdate?: number;
+  suspendedReason?: string | null;
+  avatar?: string | null;
+  rating?: number | null;
+  ratingsCount?: number | null;
+  ratingSum?: number | null;
+  driverStats?: DriverStats | null;
+  lastProfileUpdate?: number | null;
   vehicle?: {
     model: string;
     plate: string;
     color: string;
     type: 'Moto' | 'Auto';
-  };
+  } | null;
 }
 
 export interface LocationPoint {
@@ -68,16 +94,17 @@ export interface Order {
   clientId: string;
   clientName: string;
   clientPhone: string;
-  driverId?: string;
-  driverName?: string;
-  driverPhone?: string;
+  driverId?: string | null;
+  driverName?: string | null;
+  driverPhone?: string | null;
   driverVehicle?: {
-    model: string;
-    plate: string;
-    color: string;
-  };
-  driverAvatar?: string;
-  driverRating?: number;
+    model?: string | null;
+    plate?: string | null;
+    color?: string | null;
+    type?: string | null;
+  } | null;
+  driverAvatar?: string | null;
+  driverRating?: number | null;
   origin: LocationPoint;
   destination: LocationPoint;
   distanceKm: number;
@@ -89,22 +116,24 @@ export interface Order {
   driverNetEarningsUSD: number;
   status: OrderStatus;
   createdAt: number;
-  acceptedAt?: number;
-  completedAt?: number;
-  cancelledAt?: number;
-  cancelledBy?: 'Cliente' | 'Repartidor' | 'Moderador';
-  cancelReason?: string;
+  acceptedAt?: number | null;
+  completedAt?: number | null;
+  cancelledAt?: number | null;
+  cancelledBy?: ('Cliente' | 'Repartidor' | 'Moderador') | null;
+  cancelReason?: string | null;
   driverPosition?: {
     lat: number;
     lng: number;
-  };
+    name?: string | null;
+    address?: string | null;
+  } | null;
   ratingGiven?: {
     stars: number;
     tags: string[];
-    comment?: string;
-  };
-  cancellationRequest?: DriverCancellationRequest;
-  reportIncident?: ModeratorIncidentReport;
+    comment?: string | null;
+  } | null;
+  cancellationRequest?: DriverCancellationRequest | null;
+  reportIncident?: ModeratorIncidentReport | null;
 }
 
 export interface DriverCancellationRequest {
@@ -122,7 +151,7 @@ export interface ModeratorIncidentReport {
   clientPhone: string;
   driverId: string;
   driverName: string;
-  driverPhone?: string;
+  driverPhone?: string | null;
   serviceType: string;
   reason: string;
   details: string;

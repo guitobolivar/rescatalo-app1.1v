@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { User, UserRole, UserStatus } from '../types';
+import { User, UserRole, UserStatus, isDriverRole, isAdminRole, normalizeRole } from '../types';
 import {
   User as UserIcon,
   X,
@@ -127,11 +127,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     };
 
     if (isModeratorEdit) {
-      updatedData.role = role;
+      updatedData.role = normalizeRole(role);
       updatedData.status = status;
     }
 
-    if (role === 'Repartidor' || user.role === 'Repartidor') {
+    if (isDriverRole(role) || isDriverRole(user.role)) {
       updatedData.vehicle = {
         model: vehicleModel.trim() || 'Empire Keeway Horse 150',
         plate: vehiclePlate.trim().toUpperCase() || 'AC5-49X',
@@ -319,14 +319,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           {isModeratorEdit && (
             <div className="grid grid-cols-2 gap-3 p-3 bg-slate-950 rounded-2xl border border-slate-800">
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-300">Rol</label>
+                <label className="text-[11px] font-bold text-slate-300">Rol en Firestore</label>
                 <select
-                  value={role}
+                  value={normalizeRole(role)}
                   onChange={(e) => setRole(e.target.value as UserRole)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white outline-none"
                 >
-                  <option value="Usuario Normal">Usuario Normal (Cliente)</option>
-                  <option value="Repartidor">Repartidor (Conductor)</option>
+                  <option value="client">Cliente ('client')</option>
+                  <option value="driver">Repartidor ('driver')</option>
+                  <option value="admin">Administrador ('admin')</option>
                 </select>
               </div>
 
@@ -345,7 +346,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           )}
 
           {/* Vehicle Information (If Driver) */}
-          {(role === 'Repartidor' || user.role === 'Repartidor') && (
+          {(isDriverRole(role) || isDriverRole(user.role)) && (
             <div className="p-3.5 bg-slate-950 rounded-2xl border border-cyan-500/20 space-y-3">
               <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-300 uppercase tracking-wide">
                 <Bike className="w-4 h-4 text-cyan-400" />

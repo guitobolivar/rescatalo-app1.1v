@@ -6,6 +6,7 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, Firestore, doc, setDoc, getDoc, collection } from 'firebase/firestore';
+import { normalizeRole } from './types';
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
@@ -19,9 +20,9 @@ export const firebaseConfig = {
 
 export const isFirebaseConfigured = Boolean(
   firebaseConfig.apiKey &&
+  firebaseConfig.apiKey !== '' &&
   firebaseConfig.apiKey !== 'AIzaSyYourFirebaseApiKeyHere' &&
-  firebaseConfig.projectId &&
-  firebaseConfig.projectId !== 'rescatalo-venezuela'
+  !firebaseConfig.apiKey.includes('FallbackKey')
 );
 
 let app: FirebaseApp;
@@ -90,14 +91,14 @@ export const registerWithFirebase = async ({
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
-    // 2. Guardar el perfil y rol en Firestore
+    // 2. Guardar el perfil y rol ('client', 'driver', 'admin') en Firestore
     await setDoc(doc(db, 'users', user.uid), {
       uid: user.uid,
       name,
       email,
       phone: phone || '',
-      cedula: cedula || '',
-      role, // 'Usuario Normal', 'Repartidor', etc.
+      cedula: cedula || null,
+      role: normalizeRole(role), // 'client', 'driver', 'admin'
       vehicle: vehicle || null,
       createdAt: new Date().toISOString(),
     });

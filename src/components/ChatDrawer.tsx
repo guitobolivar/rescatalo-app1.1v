@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { Order } from '../types';
+import { Order, isClientRole } from '../types';
 import { Send, Phone, PhoneOff, Mic, MicOff, Volume2, X } from 'lucide-react';
 
 interface ChatDrawerProps {
@@ -57,17 +57,17 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
   };
 
   const partnerName =
-    currentUser?.role === 'Usuario Normal'
+    isClientRole(currentUser?.role)
       ? order.driverName || 'Carlos Mendoza'
       : order.clientName || 'Cliente Rescátalo';
 
   const partnerPhone =
-    currentUser?.role === 'Usuario Normal'
+    isClientRole(currentUser?.role)
       ? order.driverPhone || '+58 414 123 9876'
       : order.clientPhone || '+58 412 876 5432';
 
   const partnerAvatar =
-    currentUser?.role === 'Usuario Normal'
+    isClientRole(currentUser?.role)
       ? order.driverAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
       : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80';
 

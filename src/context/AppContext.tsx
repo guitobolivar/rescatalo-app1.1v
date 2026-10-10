@@ -15,6 +15,10 @@ import {
   AnnouncementBanner,
   ModeratorIncidentReport,
   DriverCancellationRequest,
+  normalizeRole,
+  isClientRole,
+  isDriverRole,
+  isAdminRole,
 } from '../types';
 import {
   DEFAULT_VENEZUELA_CENTER,
@@ -25,12 +29,38 @@ import {
 } from '../data/venezuelaData';
 import { notificationService } from '../utils/notifications';
 import { realtimeSync } from '../services/realtimeSync';
-import { isFirebaseConfigured, registerWithFirebase } from '../firebaseConfig';
+import { auth, db } from '../firebaseConfig';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from 'firebase/auth';
+import {
+  doc,
+  setDoc,
+  getDoc,
+  deleteDoc,
+  collection,
+  query,
+  orderBy,
+  onSnapshot,
+} from 'firebase/firestore';
+import {
+  COLLECTIONS,
+  sanitizeForFirestore,
+  saveFirestoreOrder,
+  acceptFirestoreOrder,
+  subscribeToFirestoreOrders,
+  subscribeToFirestoreUsers,
+  saveFirestoreUser,
+} from '../services/firebase';
 
 interface AppContextType {
   currentUser: User | null;
   allUsers: User[];
   isModerator: boolean;
+  isAdmin: boolean;
   pricingConfig: PricingConfig;
   updatePricingConfig: (config: Partial<PricingConfig>) => void;
   announcement: AnnouncementBanner;
@@ -38,10 +68,11 @@ interface AppContextType {
   setUserStatus: (userId: string, status: UserStatus, reason?: string) => void;
   deleteUser: (userId: string) => void;
   // Auth
-  login: (email: string, password?: string) => { success: boolean; message?: string };
+  login: (email: string, password?: string) => Promise<{ success: boolean; message?: string }>;
   register: (user: Omit<User, 'id'>) => Promise<{ success: boolean; message?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   switchUserRole: (newRole: UserRole) => void;
+  changeUserRoleInFirestore: (newRole: 'client' | 'driver' | 'admin', userId?: string) => Promise<boolean>;
   // User Profile
   updateUserProfile: (
     userId: string,
@@ -125,339 +156,14 @@ const ZERO_DRIVER_STATS: DriverStats = {
   ratingSum: 0,
 };
 
-const SEED_USERS: User[] = [
-  {
-    id: 'user-julio-mod',
-    name: 'Julio Montero (Moderador)',
-    email: 'julio.c.montero01@gmail.com',
-    cedula: 'V-15.342.980',
-    password: 'Hola123321*',
-    phone: '+58 412 998 7766',
-    role: 'Usuario Normal',
-    status: 'Activo',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    rating: 5.0,
-  },
-  {
-    id: 'user-guito-mod',
-    name: 'Guito Bolívar (Moderador)',
-    email: 'guitobolivar@gmail.com',
-    cedula: 'V-14.892.110',
-    password: '123',
-    phone: '+58 412 555 0199',
-    role: 'Usuario Normal',
-    status: 'Activo',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    rating: 5.0,
-  },
-  {
-    id: 'user-maria-cliente',
-    name: 'María Rodríguez',
-    email: 'maria.cliente@rescatalo.com',
-    cedula: 'V-20.145.987',
-    password: '123',
-    phone: '+58 412 876 5432',
-    role: 'Usuario Normal',
-    status: 'Activo',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    rating: 5.0,
-  },
-  {
-    id: 'user-carlos-repartidor',
-    name: 'Carlos Mendoza',
-    email: 'carlos.repartidor@rescatalo.com',
-    cedula: 'V-18.765.432',
-    password: '123',
-    phone: '+58 414 123 9876',
-    role: 'Repartidor',
-    status: 'Activo',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    rating: 4.9,
-    ratingsCount: 24,
-    ratingSum: 118,
-    driverStats: {
-      accumulatedKm: 89.4,
-      weeklyCompletedTrips: 18,
-      weeklyEarningsUSD: 68.20,
-      monthlyEarningsUSD: 245.50,
-      ratingsCount: 24,
-      ratingSum: 118,
-    },
-    vehicle: {
-      type: 'Moto',
-      model: 'Empire Keeway Horse 150',
-      plate: 'AC5-49X',
-      color: 'Azul Eléctrico',
-    },
-  },
-  {
-    id: 'user-jose-repartidor',
-    name: 'José Hernández',
-    email: 'jose.repartidor@rescatalo.com',
-    cedula: 'V-22.456.789',
-    password: '123',
-    phone: '+58 412 345 6789',
-    role: 'Repartidor',
-    status: 'Activo',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    rating: 4.8,
-    ratingsCount: 15,
-    ratingSum: 72,
-    driverStats: {
-      accumulatedKm: 58.2,
-      weeklyCompletedTrips: 11,
-      weeklyEarningsUSD: 44.80,
-      monthlyEarningsUSD: 186.00,
-      ratingsCount: 15,
-      ratingSum: 72,
-    },
-    vehicle: {
-      type: 'Moto',
-      model: 'Bera Socialista 150',
-      plate: 'AD8-22K',
-      color: 'Rojo Carmesí',
-    },
-  },
-];
-
-const NOW = Date.now();
-const ONE_HOUR = 60 * 60 * 1000;
-const ONE_DAY = 24 * ONE_HOUR;
-
-const INITIAL_ORDERS: Order[] = [
-  // Today (Diario)
-  {
-    id: 'ORD-VEN-8421',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-carlos-repartidor',
-    driverName: 'Carlos Mendoza',
-    driverPhone: '+58 414 123 9876',
-    driverVehicle: {
-      model: 'Empire Keeway Horse 150',
-      plate: 'AC5-49X',
-      color: 'Azul Eléctrico',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.9,
-    origin: POPULAR_LOCATIONS[0],
-    destination: POPULAR_LOCATIONS[5],
-    distanceKm: 2.8,
-    serviceType: 'rescate_moto',
-    itemDescription: 'Traslado al Casco Central',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.8,
-    totalCostUSD: 4.24,
-    driverNetEarningsUSD: 3.60,
-    status: 'Entregado',
-    createdAt: NOW - 3 * ONE_HOUR,
-    acceptedAt: NOW - 3 * ONE_HOUR + 60000,
-    completedAt: NOW - 2 * ONE_HOUR,
-  },
-  {
-    id: 'ORD-VEN-7712',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-carlos-repartidor',
-    driverName: 'Carlos Mendoza',
-    driverPhone: '+58 414 123 9876',
-    driverVehicle: {
-      model: 'Empire Keeway Horse 150',
-      plate: 'AC5-49X',
-      color: 'Azul Eléctrico',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.9,
-    origin: POPULAR_LOCATIONS[1],
-    destination: POPULAR_LOCATIONS[4],
-    distanceKm: 3.5,
-    serviceType: 'rescate_delivery',
-    itemDescription: 'Entrega de medicinas de farmacia',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.95,
-    totalCostUSD: 5.33,
-    driverNetEarningsUSD: 4.53,
-    status: 'Entregado',
-    createdAt: NOW - 5 * ONE_HOUR,
-    acceptedAt: NOW - 5 * ONE_HOUR + 120000,
-    completedAt: NOW - 4 * ONE_HOUR,
-  },
-  {
-    id: 'ORD-VEN-6105',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-jose-repartidor',
-    driverName: 'José Hernández',
-    driverPhone: '+58 412 345 6789',
-    driverVehicle: {
-      model: 'Bera Socialista 150',
-      plate: 'AD8-22K',
-      color: 'Rojo Carmesí',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.8,
-    origin: POPULAR_LOCATIONS[2],
-    destination: POPULAR_LOCATIONS[3],
-    distanceKm: 2.4,
-    serviceType: 'rescate_moto',
-    itemDescription: 'Carrera corta Plaza - Hospital',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.8,
-    totalCostUSD: 3.92,
-    driverNetEarningsUSD: 3.33,
-    status: 'Entregado',
-    createdAt: NOW - 6 * ONE_HOUR,
-    acceptedAt: NOW - 6 * ONE_HOUR + 80000,
-    completedAt: NOW - 5 * ONE_HOUR,
-  },
-  // Earlier this week (Semanal: 2-4 days ago)
-  {
-    id: 'ORD-VEN-5231',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-carlos-repartidor',
-    driverName: 'Carlos Mendoza',
-    driverPhone: '+58 414 123 9876',
-    driverVehicle: {
-      model: 'Empire Keeway Horse 150',
-      plate: 'AC5-49X',
-      color: 'Azul Eléctrico',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.9,
-    origin: POPULAR_LOCATIONS[0],
-    destination: POPULAR_LOCATIONS[2],
-    distanceKm: 4.0,
-    serviceType: 'rescate_delivery',
-    itemDescription: 'Almuerzos y bebidas',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.95,
-    totalCostUSD: 5.80,
-    driverNetEarningsUSD: 4.93,
-    status: 'Entregado',
-    createdAt: NOW - 2 * ONE_DAY,
-    acceptedAt: NOW - 2 * ONE_DAY + 60000,
-    completedAt: NOW - 2 * ONE_DAY + 1800000,
-  },
-  {
-    id: 'ORD-VEN-4190',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-jose-repartidor',
-    driverName: 'José Hernández',
-    driverPhone: '+58 412 345 6789',
-    driverVehicle: {
-      model: 'Bera Socialista 150',
-      plate: 'AD8-22K',
-      color: 'Rojo Carmesí',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.8,
-    origin: POPULAR_LOCATIONS[4],
-    destination: POPULAR_LOCATIONS[5],
-    distanceKm: 4.8,
-    serviceType: 'rescate_moto',
-    itemDescription: 'Traslado terminal a las Garcitas',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.8,
-    totalCostUSD: 5.84,
-    driverNetEarningsUSD: 4.96,
-    status: 'Entregado',
-    createdAt: NOW - 4 * ONE_DAY,
-    acceptedAt: NOW - 4 * ONE_DAY + 90000,
-    completedAt: NOW - 4 * ONE_DAY + 1900000,
-  },
-  // Earlier this month (Mensual: 12 days ago)
-  {
-    id: 'ORD-VEN-3012',
-    clientId: 'user-maria-cliente',
-    clientName: 'María Rodríguez',
-    clientPhone: '+58 412 876 5432',
-    driverId: 'user-carlos-repartidor',
-    driverName: 'Carlos Mendoza',
-    driverPhone: '+58 414 123 9876',
-    driverVehicle: {
-      model: 'Empire Keeway Horse 150',
-      plate: 'AC5-49X',
-      color: 'Azul Eléctrico',
-    },
-    driverAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    driverRating: 4.9,
-    origin: POPULAR_LOCATIONS[0],
-    destination: POPULAR_LOCATIONS[4],
-    distanceKm: 3.2,
-    serviceType: 'rescate_delivery',
-    itemDescription: 'Repuestos de moto',
-    baseFeeUSD: 2.0,
-    costPerKmUSD: 0.95,
-    totalCostUSD: 5.04,
-    driverNetEarningsUSD: 4.28,
-    status: 'Entregado',
-    createdAt: NOW - 12 * ONE_DAY,
-    acceptedAt: NOW - 12 * ONE_DAY + 60000,
-    completedAt: NOW - 12 * ONE_DAY + 1500000,
-  },
-];
-
-const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'notif-seed-1',
-    userId: 'ALL',
-    title: '¡Bienvenido a Rescátalo Venezuela!',
-    body: 'Servicio de traslados en moto y delivery en Valle de la Pascua con tarifas transparentes en USD.',
-    type: 'system',
-    timestamp: NOW - 3600000,
-    read: false,
-  },
-  {
-    id: 'notif-seed-2',
-    userId: 'user-maria-cliente',
-    title: '✅ Entrega Finalizada con Éxito',
-    body: 'Tu servicio #ORD-VEN-8421 fue completado por Carlos Mendoza. Gracias por usar Rescátalo.',
-    type: 'order_status',
-    timestamp: NOW - 7200000,
-    read: true,
-    orderId: 'ORD-VEN-8421',
-  },
-];
-
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // 1. Users state - Sync with seeds to ensure default moderators exist
-  const [allUsers, setAllUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('rescatalo_users');
-    let users: User[] = saved ? JSON.parse(saved) : SEED_USERS;
-    for (const seed of SEED_USERS) {
-      const idx = users.findIndex(
-        (u) => u.email.toLowerCase() === seed.email.toLowerCase()
-      );
-      if (idx === -1) {
-        users.push(seed);
-      } else {
-        users[idx] = { ...users[idx], ...seed };
-      }
-    }
-    return users;
-  });
+  // 1. Users state - Cargado y sincronizado en tiempo real desde Firestore colección 'users'
+  const [allUsers, setAllUsers] = useState<User[]>([]);
 
-  // Current logged in user (starts null unless valid session exists)
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('rescatalo_active_user');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
+  // Current logged in user (Sincronizado directamente con Firebase Authentication y Firestore)
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   // 2. Pricing config state
   const [pricingConfig, setPricingConfig] = useState<PricingConfig>(() => {
@@ -537,11 +243,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Incoming alert with priority tier & countdown metadata
   const [incomingOrderAlert, setIncomingOrderAlert] = useState<IncomingAlert | null>(null);
 
-  // 4. Orders state
-  const [orders, setOrders] = useState<Order[]>(() => {
-    const saved = localStorage.getItem('rescatalo_orders_clean');
-    return saved ? JSON.parse(saved) : INITIAL_ORDERS;
-  });
+  // 4. Orders state - Conexión directa en tiempo real a Firestore 'rescatalo_orders'
+  const [orders, setOrders] = useState<Order[]>([]);
 
   const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
 
@@ -552,10 +255,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   // 6. In-App & Push Notifications
-  const [notifications, setNotifications] = useState<AppNotification[]>(() => {
-    const saved = localStorage.getItem('rescatalo_notifications');
-    return saved ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
-  });
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [pushPermissionStatus, setPushPermissionStatus] = useState<NotificationPermission>(() => {
     return notificationService.getPermissionStatus();
@@ -571,18 +271,91 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem('rescatalo_incidents', JSON.stringify(incidentReports));
   }, [incidentReports]);
 
-  // Sync with localStorage
+  // Auth State Listener en tiempo real con Firebase Authentication y Firestore
   useEffect(() => {
-    localStorage.setItem('rescatalo_users', JSON.stringify(allUsers));
-  }, [allUsers]);
+    if (!auth) return;
+    let unsubUserDoc: (() => void) | null = null;
 
+    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (unsubUserDoc) {
+        unsubUserDoc();
+        unsubUserDoc = null;
+      }
+
+      if (fbUser) {
+        if (db) {
+          try {
+            const userDocRef = doc(db, 'users', fbUser.uid);
+            unsubUserDoc = onSnapshot(userDocRef, (snap) => {
+              if (snap.exists()) {
+                const raw = snap.data();
+                const uData: User = {
+                  id: snap.id,
+                  ...raw,
+                  role: normalizeRole(raw?.role),
+                  status: raw?.status || 'Activo',
+                } as User;
+                setCurrentUser(uData);
+              } else {
+                const isOwnerEmail = ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(fbUser.email?.toLowerCase() || '');
+                const defaultRole: UserRole = isOwnerEmail ? 'admin' : 'client';
+                const defaultProfile: User = {
+                  id: fbUser.uid,
+                  name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuario',
+                  email: fbUser.email || '',
+                  phone: fbUser.phoneNumber || '',
+                  role: defaultRole,
+                  status: 'Activo',
+                  rating: 5.0,
+                };
+                setCurrentUser(defaultProfile);
+                if (db) {
+                  setDoc(userDocRef, sanitizeForFirestore(defaultProfile), { merge: true }).catch(() => {});
+                }
+              }
+            });
+          } catch (e) {
+            console.warn('Error subscribing to user doc in Firestore:', e);
+          }
+        }
+      } else {
+        setCurrentUser(null);
+      }
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubUserDoc) unsubUserDoc();
+    };
+  }, []);
+
+  // Sincronización en tiempo real de la colección 'users' de Firestore
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('rescatalo_active_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('rescatalo_active_user');
-    }
-  }, [currentUser]);
+    const unsub = subscribeToFirestoreUsers((remoteUsers) => {
+      if (Array.isArray(remoteUsers)) {
+        const normalized = remoteUsers.map((u: any) => ({
+          ...u,
+          role: normalizeRole(u?.role),
+        })) as User[];
+        setAllUsers(normalized);
+      }
+    });
+    return () => {
+      unsub?.();
+    };
+  }, []);
+
+  // Sincronización en tiempo real de la colección 'rescatalo_orders' de Firestore
+  useEffect(() => {
+    const unsub = subscribeToFirestoreOrders((remoteOrders) => {
+      if (Array.isArray(remoteOrders)) {
+        setOrders(remoteOrders as Order[]);
+      }
+    });
+    return () => {
+      unsub?.();
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('rescatalo_pricing', JSON.stringify(pricingConfig));
@@ -605,16 +378,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [driverStats]);
 
   useEffect(() => {
-    localStorage.setItem('rescatalo_orders_clean', JSON.stringify(orders));
-  }, [orders]);
-
-  useEffect(() => {
     localStorage.setItem('rescatalo_chat_messages', JSON.stringify(chatMessages));
   }, [chatMessages]);
-
-  useEffect(() => {
-    localStorage.setItem('rescatalo_notifications', JSON.stringify(notifications));
-  }, [notifications]);
 
   // 8. REAL-TIME MULTI-DEVICE & FIREBASE SYNCHRONIZATION
   useEffect(() => {
@@ -819,7 +584,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     data: Partial<User>,
     isByModerator: boolean = false
   ): { success: boolean; message: string; nextAllowedDate?: string } => {
-    const targetUser = allUsers.find((u) => u.id === userId);
+    const targetUser = allUsers.find((u) => u.id === userId) || (currentUser?.id === userId ? currentUser : null);
     if (!targetUser) {
       return { success: false, message: 'Usuario no encontrado.' };
     }
@@ -856,6 +621,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       lastProfileUpdate: isByModerator ? targetUser.lastProfileUpdate : Date.now(),
     };
 
+    // Actualizar directamente en Firestore colección 'users'
+    saveFirestoreUser(userId, updatedUser).catch((err) =>
+      console.warn('Error guardando perfil en Firestore:', err)
+    );
+
     setAllUsers((prev) => prev.map((u) => (u.id === userId ? updatedUser : u)));
     if (currentUser?.id === userId) {
       setCurrentUser(updatedUser);
@@ -880,9 +650,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   };
 
-  const isModerator =
-    currentUser?.email.toLowerCase() === 'julio.c.montero01@gmail.com' ||
-    currentUser?.email.toLowerCase() === 'guitobolivar@gmail.com';
+  const isAdmin =
+    currentUser?.role === 'admin' ||
+    currentUser?.role === 'Moderador' ||
+    ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(currentUser?.email?.toLowerCase() || '');
+
+  const isModerator = isAdmin;
 
   // Moderator rate adjustment
   const updatePricingConfig = (newVals: Partial<PricingConfig>) => {
@@ -906,6 +679,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       alert('Solo las cuentas de moderador pueden cambiar el estado de moderación de usuarios.');
       return;
     }
+    const updatePayload = {
+      status: newStatus,
+      suspendedReason: newStatus === 'Suspendido' ? reason || 'Penalización administrativa de moderación' : null,
+    };
+    saveFirestoreUser(userId, updatePayload).catch((e) =>
+      console.warn('Error actualizando status en Firestore:', e)
+    );
+
     setAllUsers((prev) =>
       prev.map((u) => {
         if (u.id === userId) {
@@ -914,7 +695,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             status: newStatus,
             suspendedReason: newStatus === 'Suspendido' ? reason || 'Penalización administrativa de moderación' : undefined,
           };
-          // If this user is currently active in session, update session as well
           if (currentUser?.id === userId) {
             setCurrentUser(updated);
             if (newStatus === 'Suspendido') {
@@ -936,6 +716,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       alert('Solo las cuentas de moderador pueden eliminar cuentas.');
       return;
     }
+    if (db) {
+      deleteDoc(doc(db, 'users', userId)).catch((e) =>
+        console.warn('Error eliminando usuario en Firestore:', e)
+      );
+    }
     setAllUsers((prev) => prev.filter((u) => u.id !== userId));
     if (currentUser?.id === userId) {
       setCurrentUser(null);
@@ -943,165 +728,221 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     playAlertChime('tap');
   };
 
-  // Auth: Login
-  const login = (email: string, password?: string) => {
+  // Auth: Login con Firebase Authentication y Firestore
+  const login = async (email: string, password?: string): Promise<{ success: boolean; message?: string }> => {
     const trimmed = email.trim().toLowerCase();
-    const user = allUsers.find((u) => u.email.toLowerCase() === trimmed);
-    if (!user) {
-      return {
-        success: false,
-        message: 'No se encontró un usuario con este correo. Por favor regístrate primero.',
-      };
+    if (!trimmed || !password) {
+      return { success: false, message: 'Por favor ingresa tu correo y contraseña.' };
     }
-    if (user.password && password && user.password !== password) {
-      return { success: false, message: 'Contraseña incorrecta. Inténtalo de nuevo.' };
+    if (!auth) {
+      return { success: false, message: 'Firebase Authentication no está inicializado.' };
     }
-    if (user.status === 'Suspendido') {
-      return {
-        success: false,
-        message: `Esta cuenta se encuentra SUSPENDIDA / PENALIZADA por la administración.${
-          user.suspendedReason ? ' Motivo: ' + user.suspendedReason : ' Contacte a soporte o moderación para más información.'
-        }`,
-      };
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, trimmed, password);
+      const fbUser = userCredential.user;
+
+      let userData: User | null = null;
+      if (db) {
+        try {
+          const userSnap = await getDoc(doc(db, 'users', fbUser.uid));
+          if (userSnap.exists()) {
+            const raw = userSnap.data();
+            userData = {
+              id: userSnap.id,
+              ...raw,
+              role: normalizeRole(raw?.role),
+              status: raw?.status || 'Activo',
+            } as User;
+          }
+        } catch (fetchErr) {
+          console.warn('Error leyendo usuario de Firestore:', fetchErr);
+        }
+      }
+
+      if (!userData) {
+        const isOwnerEmail = ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(trimmed);
+        userData = {
+          id: fbUser.uid,
+          name: fbUser.displayName || trimmed.split('@')[0],
+          email: trimmed,
+          phone: fbUser.phoneNumber || '+58 412 000 0000',
+          role: isOwnerEmail ? 'admin' : 'client',
+          status: 'Activo',
+          rating: 5.0,
+        };
+      }
+
+      if (userData.status === 'Suspendido') {
+        await signOut(auth);
+        return {
+          success: false,
+          message: `Esta cuenta se encuentra SUSPENDIDA / PENALIZADA por la administración.${
+            userData.suspendedReason ? ' Motivo: ' + userData.suspendedReason : ' Contacte a soporte o moderación para más información.'
+          }`,
+        };
+      }
+
+      setCurrentUser(userData);
+      playAlertChime('tap');
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error al iniciar sesión con Firebase:', error);
+      let message = 'Error al iniciar sesión.';
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+        message = 'Credenciales inválidas. Verifica tu correo y contraseña.';
+      } else if (error.code === 'auth/wrong-password') {
+        message = 'Contraseña incorrecta. Inténtalo de nuevo.';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'El formato del correo electrónico no es válido.';
+      } else if (error.code === 'auth/user-disabled') {
+        message = 'Esta cuenta ha sido inhabilitada por la administración.';
+      } else if (error.message) {
+        message = error.message;
+      }
+      return { success: false, message };
     }
-    setCurrentUser(user);
-    playAlertChime('tap');
-    return { success: true };
   };
 
-  // Auth: Register with Anti-Multi-Account Validation per Role and Firebase Integration
+  // Auth: Register con Firebase Authentication y Firestore
   const register = async (data: Omit<User, 'id'>): Promise<{ success: boolean; message?: string }> => {
     const trimmedEmail = data.email.trim().toLowerCase();
-    const cleanCedula = (data.cedula || '').replace(/[\.\s]/g, '').toLowerCase();
-    const targetRole = data.role;
-
-    // 1. Validar Correo Electrónico único por rol
-    const emailExists = allUsers.some(
-      (u) => u.role === targetRole && u.email.trim().toLowerCase() === trimmedEmail
-    );
-    if (emailExists) {
-      return {
-        success: false,
-        message: `El correo "${data.email}" ya se encuentra registrado para el rol de ${targetRole}. Solo se permite una cuenta por rol.`,
-      };
+    if (!trimmedEmail || !data.password) {
+      return { success: false, message: 'Correo y contraseña son obligatorios.' };
+    }
+    if (!auth) {
+      return { success: false, message: 'Firebase Authentication no está inicializado.' };
     }
 
-    // 2. Validar Cédula de Identidad única por rol
-    if (cleanCedula) {
-      const cedulaExists = allUsers.some(
-        (u) =>
-          u.role === targetRole &&
-          (u.cedula || '').replace(/[\.\s]/g, '').toLowerCase() === cleanCedula
-      );
-      if (cedulaExists) {
-        return {
-          success: false,
-          message: `La Cédula de Identidad "${data.cedula}" ya está registrada para el rol de ${targetRole}.`,
-        };
-      }
-    }
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, data.password);
+      const fbUser = userCredential.user;
 
-    // 3. Validar Placa del Vehículo única si es Repartidor
-    if (targetRole === 'Repartidor' && data.vehicle?.plate) {
-      const cleanPlate = data.vehicle.plate.replace(/[\-\s]/g, '').toUpperCase();
-      const plateExists = allUsers.some(
-        (u) =>
-          u.role === 'Repartidor' &&
-          u.vehicle?.plate &&
-          u.vehicle.plate.replace(/[\-\s]/g, '').toUpperCase() === cleanPlate
-      );
-      if (plateExists) {
-        return {
-          success: false,
-          message: `La placa de vehículo "${data.vehicle.plate}" ya está registrada por otro repartidor en el sistema.`,
-        };
-      }
-    }
+      const normalizedRole = normalizeRole(data.role);
+      const isDriver = normalizedRole === 'driver' || isDriverRole(data.role);
 
-    // 4. Registrar en Firebase Authentication y Firestore si está configurado
-    let firebaseUid: string | undefined = undefined;
-    if (data.password) {
-      const fbRes = await registerWithFirebase({
-        name: data.name,
-        email: trimmedEmail,
-        password: data.password,
-        role: data.role,
-        cedula: data.cedula,
-        phone: data.phone,
-        vehicle: data.vehicle,
-      });
-
-      if (!fbRes.success) {
-        return {
-          success: false,
-          message: fbRes.message || 'Error al registrar en Firebase Authentication / Firestore.',
-        };
-      }
-      firebaseUid = fbRes.uid;
-    }
-
-    const newUser: User = {
-      ...data,
-      id: firebaseUid || `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      status: 'Activo',
-      rating: 5.0,
-      ratingsCount: 0,
-      ratingSum: 0,
-      driverStats:
-        data.role === 'Repartidor'
+      const sanitizedVehicle =
+        isDriver && data.vehicle
           ? {
-              accumulatedKm: 0,
-              weeklyCompletedTrips: 0,
-              weeklyEarningsUSD: 0,
-              monthlyEarningsUSD: 0,
-              ratingsCount: 0,
-              ratingSum: 0,
+              type: data.vehicle.type || 'Moto',
+              model: data.vehicle.model || '',
+              plate: (data.vehicle.plate || '').toUpperCase(),
+              color: data.vehicle.color || '',
             }
-          : undefined,
-      avatar:
-        data.role === 'Repartidor'
-          ? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'
-          : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      vehicle:
-        data.role === 'Repartidor'
-          ? data.vehicle || {
-              type: 'Moto',
-              model: 'Bera Socialista 150',
-              plate: 'AB1-88K',
-              color: 'Rojo',
-            }
-          : undefined,
-    };
-    setAllUsers((prev) => [...prev, newUser]);
-    setCurrentUser(newUser);
-    playAlertChime('accepted');
-    return { success: true };
+          : null;
+
+      const newUserDoc = {
+        id: fbUser.uid,
+        uid: fbUser.uid,
+        name: data.name.trim(),
+        email: trimmedEmail,
+        phone: data.phone || '',
+        cedula: data.cedula ?? null,
+        role: normalizedRole, // 'client', 'driver', 'admin'
+        status: 'Activo',
+        rating: 5.0,
+        ratingsCount: 0,
+        ratingSum: 0,
+        avatar:
+          data.avatar ||
+          (isDriver
+            ? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'
+            : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80'),
+        vehicle: sanitizedVehicle,
+        driverStats:
+          isDriver
+            ? {
+                accumulatedKm: 0,
+                weeklyCompletedTrips: 0,
+                weeklyEarningsUSD: 0,
+                monthlyEarningsUSD: 0,
+                ratingsCount: 0,
+                ratingSum: 0,
+              }
+            : null,
+        createdAt: new Date().toISOString(),
+        updatedAt: Date.now(),
+      };
+
+      const cleaned = sanitizeForFirestore(newUserDoc);
+      if (db) {
+        await setDoc(doc(db, 'users', fbUser.uid), cleaned);
+      }
+
+      const createdUser = { id: fbUser.uid, ...cleaned } as User;
+      setCurrentUser(createdUser);
+      playAlertChime('accepted');
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error al registrar usuario en Firebase:', error);
+      let message = 'Error al registrar usuario.';
+      if (error.code === 'auth/email-already-in-use') {
+        message = `El correo "${data.email}" ya se encuentra registrado en Firebase.`;
+      } else if (error.code === 'auth/weak-password') {
+        message = 'La contraseña debe tener al menos 6 caracteres.';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'El formato del correo electrónico no es válido.';
+      } else if (error.message) {
+        message = error.message;
+      }
+      return { success: false, message };
+    }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (auth) {
+      try {
+        await signOut(auth);
+      } catch (e) {
+        console.warn('Error cerrando sesión en Firebase:', e);
+      }
+    }
     setCurrentUser(null);
     playAlertChime('tap');
   };
 
-  // Switch role between the two permitted roles for convenience
-  const switchUserRole = (newRole: UserRole) => {
-    if (!currentUser) return;
-    const updated = {
-      ...currentUser,
-      role: newRole,
-      vehicle:
-        newRole === 'Repartidor' && !currentUser.vehicle
-          ? {
-              type: 'Moto' as const,
-              model: 'Empire Keeway Express 150',
-              plate: 'AE9-11M',
-              color: 'Negro',
-            }
-          : currentUser.vehicle,
-    };
-    setCurrentUser(updated);
-    setAllUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+  // Cambiar rol de usuario directamente en la base de datos de Firebase Firestore ('client', 'driver', 'admin')
+  const changeUserRoleInFirestore = async (
+    newRole: 'client' | 'driver' | 'admin',
+    targetUserId?: string
+  ): Promise<boolean> => {
+    const uid = targetUserId || currentUser?.id;
+    if (!uid) return false;
+    const normalized = normalizeRole(newRole);
+
+    if (db) {
+      try {
+        await saveFirestoreUser(uid, {
+          role: normalized,
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Error guardando rol en Firestore:', err);
+      }
+    }
+
+    if (currentUser?.id === uid) {
+      setCurrentUser((prev) => prev ? { ...prev, role: normalized } : null);
+    }
+    setAllUsers((prev) =>
+      prev.map((u) => (u.id === uid ? { ...u, role: normalized } : u))
+    );
+
+    addNotification({
+      userId: uid,
+      title: '🛡️ Rol Actualizado en Firebase',
+      body: `Tu rol en el sistema ahora es "${normalized}".`,
+      type: 'profile',
+    });
+
     playAlertChime('tap');
+    return true;
+  };
+
+  // Switch role between available roles
+  const switchUserRole = (newRole: UserRole) => {
+    const normalized = normalizeRole(newRole);
+    changeUserRoleInFirestore(normalized);
   };
 
   // Order Creation with Priority Dispatch Offset (Green: 0s, Yellow: 3s, Red: 6s)
@@ -1178,7 +1019,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setActiveOrderId(newOrder.id);
     playAlertChime('tap');
 
-    // Transmitir inmediatamente en tiempo real a Firebase y otros dispositivos/pestañas
+    // Guardar inmediatamente en Firestore colección 'rescatalo_orders'
+    saveFirestoreOrder(newOrder).catch((err) => {
+      console.warn('Error al guardar nueva orden en Firestore:', err);
+    });
+
+    // Transmitir inmediatamente en tiempo real a otros dispositivos/pestañas
     realtimeSync.broadcast({
       type: 'ORDER_UPSERT',
       order: newOrder,
@@ -1248,64 +1094,88 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     setIncomingOrderAlert(null);
 
+    const ord = orders.find((o) => o.id === orderId);
+    const driverName = currentUser?.name || 'Carlos Mendoza';
+    const driverPhone = currentUser?.phone || null;
+    const driverAvatar = currentUser?.avatar || null;
+    const driverRating = currentUser?.rating ?? 4.9;
+    const driverVehicle = currentUser?.vehicle ? {
+      type: currentUser.vehicle.type || 'Moto',
+      model: currentUser.vehicle.model || 'Empire Keeway Horse 150',
+      plate: currentUser.vehicle.plate || 'AC5-49X',
+      color: currentUser.vehicle.color || 'Azul Eléctrico',
+    } : null;
+
+    const originLat = ord?.origin?.lat || DEFAULT_VENEZUELA_CENTER.lat;
+    const originLng = ord?.origin?.lng || DEFAULT_VENEZUELA_CENTER.lng;
+
+    const driverPosition = {
+      lat: originLat + 0.004,
+      lng: originLng - 0.004,
+      name: 'Ubicación actual del repartidor',
+      address: 'En camino a recogida',
+    };
+
+    // Actualizar directamente en Firestore colección rescatalo_orders
+    // con campos opcionales limpios (sin undefined) y valores null asignados
+    acceptFirestoreOrder(orderId, {
+      driverId: currentUser?.id ?? 'repartidor',
+      driverName,
+      driverPhone: driverPhone ?? null,
+      driverAvatar: driverAvatar ?? null,
+      driverRating: driverRating ?? 5.0,
+      driverVehicle: driverVehicle ?? null,
+      driverPosition: driverPosition ?? null,
+    }).catch((err) => {
+      console.warn('Error al actualizar Firestore al aceptar orden:', err);
+    });
+
     let updatedOrderData: Order | null = null;
     let clientNotificationObj: AppNotification | null = null;
 
     setOrders((prev) =>
-      prev.map((ord) => {
-        if (ord.id === orderId) {
-          const driverName = currentUser?.name || 'Carlos Mendoza';
-          const driverPhone = currentUser?.phone || '+58 414 123 9876';
-          const driverAvatar = currentUser?.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80';
-          const driverRating = currentUser?.rating || 4.9;
-          const driverVehicle = currentUser?.vehicle || {
-            model: 'Empire Keeway Horse 150',
-            plate: 'AC5-49X',
-            color: 'Azul Eléctrico',
-          };
-          const driverPosition = {
-            lat: ord.origin.lat + 0.004,
-            lng: ord.origin.lng - 0.004,
-            name: 'Ubicación actual del repartidor',
-            address: 'En camino a recogida',
-          };
-
+      prev.map((item) => {
+        if (item.id === orderId) {
           const updated: Order = {
-            ...ord,
+            ...item,
             status: 'Repartidor asignado',
-            driverId: currentUser?.id || 'user-carlos-repartidor',
+            driverId: currentUser?.id ?? 'repartidor',
             driverName,
-            driverPhone,
-            driverAvatar,
+            driverPhone: driverPhone ?? null,
+            driverAvatar: driverAvatar ?? null,
             driverRating,
-            driverVehicle: driverVehicle || null as any,
-            acceptedAt: Date.now(),
-            completedAt: ord.completedAt ?? null as any,
-            cancelledAt: ord.cancelledAt ?? null as any,
-            cancelledBy: ord.cancelledBy ?? null as any,
-            cancelReason: ord.cancelReason ?? null as any,
-            ratingGiven: ord.ratingGiven ?? null as any,
-            cancellationRequest: ord.cancellationRequest ?? null as any,
-            reportIncident: ord.reportIncident ?? null as any,
+            driverVehicle: driverVehicle ? {
+              model: driverVehicle.model,
+              plate: driverVehicle.plate,
+              color: driverVehicle.color,
+            } : null,
             driverPosition,
+            acceptedAt: Date.now(),
+            completedAt: item.completedAt ?? null,
+            cancelledAt: item.cancelledAt ?? null,
+            cancelledBy: item.cancelledBy ?? null,
+            cancelReason: item.cancelReason ?? null,
+            ratingGiven: item.ratingGiven ?? null,
+            cancellationRequest: item.cancellationRequest ?? null,
+            reportIncident: item.reportIncident ?? null,
           };
 
           updatedOrderData = updated;
 
           clientNotificationObj = {
             id: `notif-accepted-${Date.now()}`,
-            userId: ord.clientId,
+            userId: item.clientId,
             title: '🛵 ¡Servicio Aceptado por Repartidor!',
-            body: `${driverName} aceptó tu servicio #${ord.id}. Tu repartidor va en camino al punto de recogida.`,
+            body: `${driverName} aceptó tu servicio #${item.id}. Tu repartidor va en camino al punto de recogida.`,
             type: 'order_status',
-            orderId: ord.id,
+            orderId: item.id,
             timestamp: Date.now(),
             read: false,
           };
 
           return updated;
         }
-        return ord;
+        return item;
       })
     );
 
@@ -1469,6 +1339,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // Sincronizar en tiempo real y emitir notificación push
     if (updatedOrderObj) {
+      saveFirestoreOrder(updatedOrderObj).catch((e) =>
+        console.warn('Error guardando avance de estado en Firestore:', e)
+      );
       realtimeSync.broadcast({
         type: 'ORDER_UPSERT',
         order: updatedOrderObj,
@@ -1524,6 +1397,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // Sincronizar en tiempo real
     if (cancelledOrderObj) {
+      saveFirestoreOrder(cancelledOrderObj).catch((e) =>
+        console.warn('Error cancelando orden en Firestore:', e)
+      );
       realtimeSync.broadcast({
         type: 'ORDER_UPSERT',
         order: cancelledOrderObj,
@@ -1588,20 +1464,34 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     comment?: string
   ) => {
     const targetOrder = orders.find((o) => o.id === orderId);
+    let updatedOrderWithRating: Order | null = null;
 
     setOrders((prev) =>
-      prev.map((ord) =>
-        ord.id === orderId
-          ? {
-              ...ord,
-              ratingGiven: { stars, tags, comment },
-            }
-          : ord
-      )
+      prev.map((ord) => {
+        if (ord.id === orderId) {
+          const updated = {
+            ...ord,
+            ratingGiven: { stars, tags, comment: comment || undefined },
+          };
+          updatedOrderWithRating = updated;
+          return updated;
+        }
+        return ord;
+      })
     );
 
+    if (updatedOrderWithRating) {
+      saveFirestoreOrder(updatedOrderWithRating).catch((e) =>
+        console.warn('Error guardando rating en Firestore:', e)
+      );
+      realtimeSync.broadcast({
+        type: 'ORDER_UPSERT',
+        order: updatedOrderWithRating,
+      });
+    }
+
     // Update driver's rating average and count
-    const driverId = targetOrder?.driverId || 'user-carlos-repartidor';
+    const driverId = targetOrder?.driverId || 'repartidor';
     setAllUsers((prevUsers) =>
       prevUsers.map((u) => {
         if (u.id === driverId) {
@@ -1622,6 +1512,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               ratingSum: newSum,
             },
           };
+
+          saveFirestoreUser(driverId, updatedUser).catch((e) =>
+            console.warn('Error actualizando rating de repartidor en Firestore:', e)
+          );
 
           if (currentUser?.id === driverId) {
             setCurrentUser(updatedUser);
@@ -1865,6 +1759,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         currentUser,
         allUsers,
         isModerator,
+        isAdmin,
         pricingConfig,
         updatePricingConfig,
         announcement,
@@ -1875,6 +1770,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         register,
         logout,
         switchUserRole,
+        changeUserRoleInFirestore,
         updateUserProfile,
         notifications,
         unreadNotificationsCount,

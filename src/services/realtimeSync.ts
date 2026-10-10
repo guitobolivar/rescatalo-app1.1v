@@ -17,7 +17,7 @@ import { Order, LocationPoint, ModeratorIncidentReport, AppNotification } from '
 export type RealtimeSyncMessage =
   | { type: 'ORDER_UPSERT'; order: Order }
   | { type: 'ORDER_ACCEPTED'; order: Order; driverName: string }
-  | { type: 'DRIVER_LOCATION_UPDATE'; orderId: string; location: { lat: number; lng: number; name?: string } }
+  | { type: 'DRIVER_LOCATION_UPDATE'; orderId: string; location: { lat: number; lng: number; name?: string | null; address?: string | null; heading?: number; speed?: number } }
   | { type: 'INCIDENT_NEW'; incident: ModeratorIncidentReport }
   | { type: 'NOTIFICATION_DISPATCH'; notification: AppNotification };
 
@@ -25,7 +25,7 @@ class RealtimeSyncManager {
   private channel: BroadcastChannel | null = null;
   private orderListeners: Set<(order: Order) => void> = new Set();
   private ordersListListeners: Set<(orders: Order[]) => void> = new Set();
-  private locationListeners: Map<string, Set<(loc: { lat: number; lng: number; name?: string }) => void>> = new Map();
+  private locationListeners: Map<string, Set<(loc: { lat: number; lng: number; name?: string | null; address?: string | null; heading?: number; speed?: number }) => void>> = new Map();
   private incidentListeners: Set<(inc: ModeratorIncidentReport) => void> = new Set();
   private notificationListeners: Set<(notif: AppNotification) => void> = new Set();
 
@@ -64,11 +64,9 @@ class RealtimeSyncManager {
   }
 
   private initFirestoreSync() {
-    if (!isFirebaseConfigured) return;
-
     // Listen to orders collection in Firestore
     subscribeToFirestoreOrders((remoteOrders) => {
-      if (Array.isArray(remoteOrders) && remoteOrders.length > 0) {
+      if (Array.isArray(remoteOrders)) {
         for (const listener of this.ordersListListeners) {
           listener(remoteOrders as Order[]);
         }
@@ -142,18 +140,16 @@ class RealtimeSyncManager {
       // ignore
     }
 
-    // 3. Firestore Cloud Persistence if configured
-    if (isFirebaseConfigured) {
-      if (msg.type === 'ORDER_UPSERT' || msg.type === 'ORDER_ACCEPTED') {
-        saveFirestoreOrder(msg.order);
-      } else if (msg.type === 'DRIVER_LOCATION_UPDATE') {
-        updateFirestoreDriverLocation(msg.orderId, {
-          lat: msg.location.lat,
-          lng: msg.location.lng,
-        });
-      } else if (msg.type === 'INCIDENT_NEW') {
-        saveFirestoreIncident(msg.incident);
-      }
+    // 3. Firestore Cloud Persistence
+    if (msg.type === 'ORDER_UPSERT' || msg.type === 'ORDER_ACCEPTED') {
+      saveFirestoreOrder(msg.order);
+    } else if (msg.type === 'DRIVER_LOCATION_UPDATE') {
+      updateFirestoreDriverLocation(msg.orderId, {
+        lat: msg.location.lat,
+        lng: msg.location.lng,
+      });
+    } else if (msg.type === 'INCIDENT_NEW') {
+      saveFirestoreIncident(msg.incident);
     }
   }
 
@@ -168,7 +164,10 @@ class RealtimeSyncManager {
     return () => this.ordersListListeners.delete(callback);
   }
 
-  public onDriverLocation(orderId: string, callback: (loc: { lat: number; lng: number; name?: string }) => void): () => void {
+  public onDriverLocation(
+    orderId: string,
+    callback: (loc: { lat: number; lng: number; name?: string | null; address?: string | null; heading?: number; speed?: number }) => void
+  ): () => void {
     if (!this.locationListeners.has(orderId)) {
       this.locationListeners.set(orderId, new Set());
     }

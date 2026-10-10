@@ -16,7 +16,9 @@ import {
   Lock,
   Clock,
   Sparkles,
+  Database,
 } from 'lucide-react';
+import { isDriverRole, isAdminRole, isClientRole, normalizeRole } from '../types';
 
 interface UserProfileViewProps {
   onBackToHome: () => void;
@@ -25,7 +27,7 @@ interface UserProfileViewProps {
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const UserProfileView: React.FC<UserProfileViewProps> = ({ onBackToHome }) => {
-  const { currentUser, updateUserProfile, logout, isModerator } = useApp();
+  const { currentUser, updateUserProfile, logout, isModerator, isAdmin, changeUserRoleInFirestore } = useApp();
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -35,6 +37,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ onBackToHome }
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleColor, setVehicleColor] = useState('');
   const [vehicleType, setVehicleType] = useState<'Moto' | 'Auto'>('Moto');
+  const [roleUpdating, setRoleUpdating] = useState(false);
 
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'error';
@@ -189,14 +192,77 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ onBackToHome }
             <p className="text-xs text-slate-400 mt-0.5">{currentUser.email}</p>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-[10px] font-mono text-cyan-400 bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
-                Rol: {currentUser.role}
+                Rol en Firestore: <strong className="text-white">{currentUser.role}</strong>
               </span>
-              {isModerator && (
-                <span className="text-[10px] font-mono text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/40 flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3" /> Moderador
+              {(isModerator || isAdmin || isAdminRole(currentUser.role)) && (
+                <span className="text-[10px] font-mono text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/40 flex items-center gap-1 font-bold">
+                  <ShieldCheck className="w-3 h-3 text-amber-400" /> Admin Activo
                 </span>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Direct Firestore Role Switcher Card */}
+        <div className="mt-3 pt-3 border-t border-slate-800/80">
+          <div className="flex items-center justify-between gap-1 mb-2">
+            <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <Database className="w-3.5 h-3.5 text-cyan-400" />
+              Cambiar Rol Directo en Base de Datos:
+            </span>
+            {roleUpdating && (
+              <span className="text-[10px] text-cyan-300 animate-pulse font-mono">Actualizando...</span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              disabled={roleUpdating || currentUser.role === 'client'}
+              onClick={async () => {
+                setRoleUpdating(true);
+                await changeUserRoleInFirestore('client');
+                setRoleUpdating(false);
+              }}
+              className={`py-2 px-2 rounded-xl text-center text-xs font-bold transition-all cursor-pointer border ${
+                currentUser.role === 'client'
+                  ? 'bg-cyan-950 text-cyan-300 border-cyan-400 shadow-sm shadow-cyan-950 ring-1 ring-cyan-400'
+                  : 'bg-slate-950/80 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+              }`}
+            >
+              Cliente ('client')
+            </button>
+            <button
+              type="button"
+              disabled={roleUpdating || currentUser.role === 'driver'}
+              onClick={async () => {
+                setRoleUpdating(true);
+                await changeUserRoleInFirestore('driver');
+                setRoleUpdating(false);
+              }}
+              className={`py-2 px-2 rounded-xl text-center text-xs font-bold transition-all cursor-pointer border ${
+                currentUser.role === 'driver'
+                  ? 'bg-blue-950 text-blue-300 border-blue-400 shadow-sm shadow-blue-950 ring-1 ring-blue-400'
+                  : 'bg-slate-950/80 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+              }`}
+            >
+              Repartidor ('driver')
+            </button>
+            <button
+              type="button"
+              disabled={roleUpdating || currentUser.role === 'admin'}
+              onClick={async () => {
+                setRoleUpdating(true);
+                await changeUserRoleInFirestore('admin');
+                setRoleUpdating(false);
+              }}
+              className={`py-2 px-2 rounded-xl text-center text-xs font-bold transition-all cursor-pointer border ${
+                currentUser.role === 'admin'
+                  ? 'bg-amber-950 text-amber-300 border-amber-400 shadow-sm shadow-amber-950 ring-1 ring-amber-400'
+                  : 'bg-slate-950/80 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+              }`}
+            >
+              Admin ('admin')
+            </button>
           </div>
         </div>
       </div>
@@ -312,7 +378,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ onBackToHome }
         </div>
 
         {/* Datos de Vehículo (Si es Repartidor) */}
-        {currentUser.role === 'Repartidor' && (
+        {isDriverRole(currentUser.role) && (
           <div className="pt-3 border-t border-slate-800 space-y-3">
             <span className="text-xs font-black uppercase text-cyan-400 tracking-wider flex items-center gap-1.5">
               <Bike className="w-4 h-4 text-cyan-400" />

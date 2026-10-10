@@ -1,9 +1,6 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
 import { useApp } from '../context/AppContext';
-import { UserRole } from '../types';
+import { UserRole, isClientRole, isDriverRole } from '../types';
 import { RescataloLogo } from './RescataloLogo';
 import { User, Bike, Mail, Lock, Phone, ArrowRight, X } from 'lucide-react';
 
@@ -26,7 +23,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [phone, setPhone] = useState('+58 ');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('Usuario Normal');
+  const [role, setRole] = useState<UserRole>('client');
   const [vehicleModel, setVehicleModel] = useState('Empire Keeway Horse 150');
   const [vehiclePlate, setVehiclePlate] = useState('AC5-49X');
   const [errorMsg, setErrorMsg] = useState('');
@@ -38,7 +35,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg('');
 
     if (mode === 'login') {
-      const res = login(email, password);
+      const res = await login(email, password);
       if (res.success) {
         onClose();
       } else {
@@ -49,43 +46,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMsg('Todos los campos son obligatorios');
         return;
       }
-      // 1. Crear el usuario en Authentication y guardar perfil en Firestore
-      try {
-        const userCredential = await createUserWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-        const user = userCredential.user;
-
-        // 2. Guardar el perfil y rol en Firestore
-        await setDoc(doc(db, 'users', user.uid), {
-          uid: user.uid,
-          name: name.trim(),
-          email: email.trim().toLowerCase(),
-          role: role,
-          phone: `+58 ${phone.trim().replace(/^\+58\s*/, '')}`,
-          vehicle:
-            role === 'Repartidor'
-              ? {
-                  type: 'Moto',
-                  model: vehicleModel,
-                  plate: vehiclePlate,
-                  color: 'Negro / Azul',
-                }
-              : null,
-          createdAt: new Date().toISOString(),
-        });
-
-        console.log('¡Usuario registrado con éxito en Firebase!', user.uid);
-      } catch (fbError: any) {
-        console.error('Error al registrar en Firebase:', fbError);
-      }
 
       const res = await register({
         name: name.trim(),
         phone: `+58 ${phone.trim().replace(/^\+58\s*/, '')}`,
         email: email.trim().toLowerCase(),
         password,
-        role,
+        role: isDriverRole(role) ? 'driver' : 'client',
         vehicle:
-          role === 'Repartidor'
+          isDriverRole(role)
             ? {
                 type: 'Moto',
                 model: vehicleModel,
@@ -176,9 +145,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setRole('Usuario Normal')}
+                    onClick={() => setRole('client')}
                     className={`p-2 rounded-xl border text-left flex items-center gap-1.5 cursor-pointer ${
-                      role === 'Usuario Normal'
+                      isClientRole(role)
                         ? 'border-cyan-400 bg-cyan-950/70 text-white font-bold'
                         : 'border-slate-800 bg-slate-950 text-slate-400'
                     }`}
@@ -186,15 +155,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <User className="w-4 h-4 text-cyan-400 shrink-0" />
                     <div>
                       <span className="block text-[11px] font-bold">Cliente</span>
-                      <span className="block text-[9px] text-slate-400">Usuario Normal</span>
+                      <span className="block text-[9px] text-slate-400">('client')</span>
                     </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setRole('Repartidor')}
+                    onClick={() => setRole('driver')}
                     className={`p-2 rounded-xl border text-left flex items-center gap-1.5 cursor-pointer ${
-                      role === 'Repartidor'
+                      isDriverRole(role)
                         ? 'border-blue-400 bg-blue-950/70 text-white font-bold'
                         : 'border-slate-800 bg-slate-950 text-slate-400'
                     }`}
@@ -202,7 +171,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <Bike className="w-4 h-4 text-blue-400 shrink-0" />
                     <div>
                       <span className="block text-[11px] font-bold">Repartidor</span>
-                      <span className="block text-[9px] text-slate-400">Conductor</span>
+                      <span className="block text-[9px] text-slate-400">('driver')</span>
                     </div>
                   </button>
                 </div>

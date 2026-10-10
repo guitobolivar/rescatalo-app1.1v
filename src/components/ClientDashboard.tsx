@@ -322,7 +322,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
                         clientActiveOrder.driverAvatar ||
                         'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'
                       }
-                      alt={clientActiveOrder.driverName}
+                      alt={clientActiveOrder.driverName || 'Repartidor'}
                       className="w-12 h-12 rounded-2xl object-cover border border-cyan-500/40"
                     />
                     <div className="min-w-0 flex-1">
@@ -614,7 +614,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
           isOpen={isReportModalOpen}
           onClose={() => setIsReportModalOpen(false)}
           orderId={clientActiveOrder.id}
-          driverName={clientActiveOrder.driverName}
+          driverName={clientActiveOrder.driverName || 'Repartidor'}
           onConfirmReport={(reason, details) => {
             reportDriverIncident(clientActiveOrder.id, reason, details);
           }}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { User, UserRole, UserStatus } from '../types';
+import { User, UserRole, UserStatus, isDriverRole, isClientRole, isAdminRole, normalizeRole } from '../types';
 import { MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
 import { UserProfileModal } from './UserProfileModal';
 import {
@@ -53,6 +53,7 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
     allUsers,
     incidentReports,
     updateIncidentStatus,
+    changeUserRoleInFirestore,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'pricing' | 'users' | 'finances' | 'announcement' | 'stats' | 'incidents'>('pricing');
@@ -60,6 +61,7 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
   const [userForProfileEdit, setUserForProfileEdit] = useState<User | null>(null);
   const [expandedDriverId, setExpandedDriverId] = useState<string | null>(null);
   const [settledDrivers, setSettledDrivers] = useState<Record<string, boolean>>({});
+  const [roleChangeFeedback, setRoleChangeFeedback] = useState<string | null>(null);
 
   // Announcement editable states
   const [announcementEnabled, setAnnouncementEnabled] = useState(announcement.enabled);
@@ -87,12 +89,18 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
 
   // User management tab states
   const [userSearchQuery, setUserSearchQuery] = useState('');
-  const [userRoleFilter, setUserRoleFilter] = useState<'ALL' | 'CLIENTS' | 'DRIVERS' | 'SUSPENDED'>('ALL');
+  const [userRoleFilter, setUserRoleFilter] = useState<'ALL' | 'CLIENTS' | 'DRIVERS' | 'ADMINS' | 'SUSPENDED'>('ALL');
   const [suspensionModalUser, setSuspensionModalUser] = useState<User | null>(null);
   const [suspensionReason, setSuspensionReason] = useState('Incumplimiento de términos y condiciones');
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
   if (!isOpen) return null;
+
+  const handleRoleChangeForUser = async (userId: string, newRole: 'client' | 'driver' | 'admin') => {
+    await changeUserRoleInFirestore(newRole, userId);
+    setRoleChangeFeedback(`Rol de usuario actualizado en Firebase a '${newRole}'`);
+    setTimeout(() => setRoleChangeFeedback(null), 2500);
+  };
 
   const handleSaveRates = (e: React.FormEvent) => {
     e.preventDefault();
@@ -151,8 +159,9 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
 
     if (!matchesQuery) return false;
 
-    if (userRoleFilter === 'CLIENTS') return u.role === 'Usuario Normal';
-    if (userRoleFilter === 'DRIVERS') return u.role === 'Repartidor';
+    if (userRoleFilter === 'CLIENTS') return isClientRole(u.role);
+    if (userRoleFilter === 'DRIVERS') return isDriverRole(u.role);
+    if (userRoleFilter === 'ADMINS') return isAdminRole(u.role);
     if (userRoleFilter === 'SUSPENDED') return u.status === 'Suspendido';
     return true;
   });
@@ -494,7 +503,7 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                         : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
                     }`}
                   >
-                    Clientes ({allUsers.filter((u) => u.role === 'Usuario Normal').length})
+                    Clientes ({allUsers.filter((u) => isClientRole(u.role)).length})
                   </button>
                   <button
                     type="button"
@@ -505,7 +514,18 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                         : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
                     }`}
                   >
-                    Repartidores ({allUsers.filter((u) => u.role === 'Repartidor').length})
+                    Repartidores ({allUsers.filter((u) => isDriverRole(u.role)).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUserRoleFilter('ADMINS')}
+                    className={`px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-all ${
+                      userRoleFilter === 'ADMINS'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Admins ({allUsers.filter((u) => isAdminRole(u.role)).length})
                   </button>
                   <button
                     type="button"
@@ -519,6 +539,12 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                     Suspendidos ({allUsers.filter((u) => u.status === 'Suspendido').length})
                   </button>
                 </div>
+
+                {roleChangeFeedback && (
+                  <div className="p-2 rounded-xl bg-cyan-950/80 border border-cyan-400/50 text-cyan-300 text-xs font-bold text-center animate-in fade-in">
+                    {roleChangeFeedback}
+                  </div>
+                )}
 
                 {/* Users List */}
                 <div className="space-y-2.5 max-h-[50vh] overflow-y-auto no-scrollbar pr-1">
@@ -553,18 +579,20 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                                     {u.name}
                                   </span>
                                   {isCurrentUser && (
-                                    <span className="text-[9px] bg-cyan-950 text-cyan-300 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                                    <span className="text-[9px] bg-cyan-950 text-cyan-300 px-1.5 py-0.2 rounded border border-cyan-500/30 font-bold">
                                       Tú
                                     </span>
                                   )}
                                   <span
-                                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
-                                      u.role === 'Repartidor'
-                                        ? 'bg-blue-950 text-blue-300 border border-blue-500/30'
-                                        : 'bg-slate-800 text-slate-300'
+                                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${
+                                      isAdminRole(u.role)
+                                        ? 'bg-amber-950 text-amber-300 border-amber-500/40'
+                                        : isDriverRole(u.role)
+                                        ? 'bg-blue-950 text-blue-300 border-blue-500/30'
+                                        : 'bg-cyan-950 text-cyan-300 border-cyan-500/30'
                                     }`}
                                   >
-                                    {u.role === 'Repartidor' ? 'Repartidor' : 'Cliente'}
+                                    {isAdminRole(u.role) ? 'Admin' : isDriverRole(u.role) ? 'Repartidor' : 'Cliente'}
                                   </span>
                                   <span
                                     className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
@@ -604,6 +632,50 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                                       Motivo: {u.suspendedReason}
                                     </div>
                                   )}
+
+                                  {/* Direct Firestore Role Switcher per User */}
+                                  <div className="flex items-center gap-1 pt-1 mt-1 border-t border-slate-900 flex-wrap">
+                                    <span className="text-[9px] text-slate-500 font-bold">Cambiar rol:</span>
+                                    <button
+                                      type="button"
+                                      disabled={u.role === 'client'}
+                                      onClick={() => handleRoleChangeForUser(u.id, 'client')}
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer transition-all ${
+                                        u.role === 'client'
+                                          ? 'bg-cyan-950 text-cyan-300 border border-cyan-500/40'
+                                          : 'bg-slate-900 text-slate-400 hover:text-white'
+                                      }`}
+                                      title="Establecer rol client en Firestore"
+                                    >
+                                      client
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={u.role === 'driver'}
+                                      onClick={() => handleRoleChangeForUser(u.id, 'driver')}
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer transition-all ${
+                                        u.role === 'driver'
+                                          ? 'bg-blue-950 text-blue-300 border border-blue-500/40'
+                                          : 'bg-slate-900 text-slate-400 hover:text-white'
+                                      }`}
+                                      title="Establecer rol driver en Firestore"
+                                    >
+                                      driver
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={u.role === 'admin'}
+                                      onClick={() => handleRoleChangeForUser(u.id, 'admin')}
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer transition-all ${
+                                        u.role === 'admin'
+                                          ? 'bg-amber-950 text-amber-300 border border-amber-500/40'
+                                          : 'bg-slate-900 text-slate-400 hover:text-white'
+                                      }`}
+                                      title="Establecer rol admin en Firestore"
+                                    >
+                                      admin
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -765,7 +837,7 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                 return t >= startPeriodTimestamp;
               });
 
-              const driversList = allUsers.filter((u) => u.role === 'Repartidor');
+              const driversList = allUsers.filter((u) => isDriverRole(u.role));
 
               const driverFinancials = driversList.map((driver) => {
                 const driverOrders = periodCompletedOrders.filter((o) => o.driverId === driver.id);
@@ -1039,7 +1111,7 @@ export const ModeratorModal: React.FC<ModeratorModalProps> = ({ isOpen, onClose 
                       {allUsers.length}
                     </div>
                     <span className="text-[10px] text-slate-500 mt-0.5 block">
-                      {allUsers.filter((u) => u.role === 'Usuario Normal').length} Clientes / {allUsers.filter((u) => u.role === 'Repartidor').length} Repartidores
+                      {allUsers.filter((u) => isClientRole(u.role)).length} Clientes / {allUsers.filter((u) => isDriverRole(u.role)).length} Repartidores / {allUsers.filter((u) => isAdminRole(u.role)).length} Admins
                     </span>
                   </div>
 

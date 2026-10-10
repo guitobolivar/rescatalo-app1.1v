@@ -2,6 +2,7 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import { RescataloLogo } from './RescataloLogo';
 import { ShieldCheck, LogOut, User, Bike, Bell } from 'lucide-react';
+import { isDriverRole, isAdminRole } from '../types';
 
 interface NavbarProps {
   onOpenModerator: () => void;
@@ -14,7 +15,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenNotifications,
   onOpenProfile,
 }) => {
-  const { currentUser, isModerator, logout, unreadNotificationsCount } = useApp();
+  const { currentUser, isModerator, isAdmin, logout, unreadNotificationsCount } = useApp();
 
   return (
     <header className="sticky top-0 z-40 w-full bg-[#080d19]/85 backdrop-blur-xl border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-lg shadow-black/40">
@@ -62,12 +63,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <div
               className={`w-6 h-6 rounded-xl flex items-center justify-center shrink-0 ${
-                currentUser.role === 'Repartidor'
+                isAdminRole(currentUser.role)
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                  : isDriverRole(currentUser.role)
                   ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
                   : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
               }`}
             >
-              {currentUser.role === 'Repartidor' ? (
+              {isAdminRole(currentUser.role) ? (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              ) : isDriverRole(currentUser.role) ? (
                 <Bike className="w-3.5 h-3.5" />
               ) : (
                 <User className="w-3.5 h-3.5" />
@@ -78,19 +83,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 {currentUser.name.split(' ')[0]}
               </span>
               <span className="text-[9px] text-cyan-300 font-bold block leading-none uppercase tracking-wide">
-                {currentUser.role === 'Repartidor' ? 'Moto' : 'Cliente'}
+                {isAdminRole(currentUser.role) ? 'Admin' : isDriverRole(currentUser.role) ? 'Moto' : 'Cliente'}
               </span>
             </div>
           </button>
         )}
 
-        {/* Moderator Rate Adjustment Button (Exclusive to moderator) */}
-        {isModerator && (
+        {/* Moderator / Admin Button */}
+        {(isModerator || isAdmin || isAdminRole(currentUser?.role)) && (
           <button
             type="button"
             onClick={onOpenModerator}
             className="px-2 py-1.5 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-300 border border-amber-500/50 text-xs font-black rounded-2xl flex items-center gap-1 cursor-pointer transition-all active:scale-95 shadow-sm"
-            title="Panel de Moderación y Tarifas"
+            title="Panel de Control General y Moderación"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
             <span>Admin</span>
