@@ -1,0 +1,61 @@
+{
+  "entities": {
+    "User": {
+      "collection": "users",
+      "fields": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" },
+        "rating": { "type": "number" },
+        "ratingAverage": { "type": "number" },
+        "totalRatings": { "type": "number" },
+        "priorityWeight": { "type": "number" },
+        "vehicle": { "type": "map" }
+      }
+    },
+    "Driver": {
+      "collection": "drivers",
+      "fields": {
+        "driverId": { "type": "string" },
+        "ratingAverage": { "type": "number" },
+        "totalRatings": { "type": "number" },
+        "priorityWeight": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "Order": {
+      "collection": "orders",
+      "fields": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "driverId": { "type": "string" },
+        "driverName": { "type": "string" },
+        "driverPhone": { "type": "string" },
+        "status": { "type": "string" },
+        "origin": { "type": "map" },
+        "destination": { "type": "map" },
+        "serviceType": { "type": "string" },
+        "totalCostUSD": { "type": "number" },
+        "driverNetEarningsUSD": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "completedAt": { "type": "number" },
+        "ratingGiven": { "type": "map" }
+      }
+    },
+    "ChatMessage": {
+      "collection": "orders/{orderId}/messages",
+      "fields": {
+        "text": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string" },
+        "createdAt": { "type": "timestamp" },
+        "timestamp": { "type": "number" }
+      }
+    }
+  }
+}

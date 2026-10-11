@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Perfiles de usuarios
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Datos y calificaciones de repartidores (Fase 2)
+    match /drivers/{driverId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // Pedidos activos e historial (Fase 1)
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated();
+
+      // Fase 3: Chats Privados en tiempo real por ID único de orden
+      match /messages/{messageId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    // Incidencias y reportes para moderación
+    match /incidents/{incidentId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Ubicaciones de conductores en tiempo real
+    match /driver_locations/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Notificaciones
+    match /notifications/{notifId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
