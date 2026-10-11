@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { InteractiveMap } from './InteractiveMap';
 import { ChatDrawer } from './ChatDrawer';
-import { Order, OrderStatus, isDriverRole } from '../types';
+import { Order, OrderStatus, isDriverRole, normalizeOrderStatus, getOrderStatusText } from '../types';
 import { buildWhatsAppLink, getDriverPerformance } from '../data/venezuelaData';
 import { MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
 import { CancelOrderModal } from './CancelOrderModal';
 import { DriverCancellationRequestModal } from './DriverCancellationRequestModal';
+import { subscribeToFirestoreOrderMessages } from '../services/firebase';
 import {
   Power,
   DollarSign,
@@ -85,6 +86,43 @@ export const DriverDashboard: React.FC = () => {
         o.status !== 'Cancelado'
     ) || null;
 
+  // Contador dinámico de mensajes no leídos del cliente para el repartidor
+  const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (!myActiveOrder?.id) {
+      setUnreadChatCount(0);
+      return;
+    }
+
+    const unsub = subscribeToFirestoreOrderMessages(myActiveOrder.id, (msgs) => {
+      if (isChatOpen) {
+        setUnreadChatCount(0);
+      } else {
+        const incoming = msgs.filter((m) => m.senderId !== currentUser?.id);
+        const lastReadTimestamp = parseInt(
+          localStorage.getItem(`rescatalo_chat_driver_read_${myActiveOrder.id}`) || '0',
+          10
+        );
+        const unread = incoming.filter((m) => (m.timestamp || 0) > lastReadTimestamp).length;
+        setUnreadChatCount(unread);
+      }
+    });
+
+    return () => {
+      unsub?.();
+    };
+  }, [myActiveOrder?.id, isChatOpen, currentUser?.id]);
+
+  const handleOpenDriverChat = (tab: 'chat' | 'call' = 'chat') => {
+    if (myActiveOrder?.id) {
+      localStorage.setItem(`rescatalo_chat_driver_read_${myActiveOrder.id}`, Date.now().toString());
+    }
+    setUnreadChatCount(0);
+    setChatInitialTab(tab);
+    setIsChatOpen(true);
+  };
+
   // Unassigned pending orders looking for a driver in Valle de la Pascua
   const pendingOrders = orders.filter((o) => o.status === 'Buscando repartidor');
 
@@ -111,43 +149,43 @@ export const DriverDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [incomingOrderAlert, rejectIncomingOrder]);
 
-  // Request confirmation modal before advancing any step
-  const handleInitiateStepTransition = (currentStatus: OrderStatus) => {
+  // Request confirmation modal before advancing any step with standard Firebase statuses
+  const handleInitiateStepTransition = (targetNextStatus: OrderStatus) => {
     if (!myActiveOrder) return;
 
-    if (currentStatus === 'Repartidor asignado') {
+    if (targetNextStatus === 'ARRIVED_AT_STORE') {
       setStepConfirmModal({
-        nextStatus: 'Llegué al comercio',
-        title: '¿Confirmas tu llegada al punto de recogida?',
+        nextStatus: 'ARRIVED_AT_STORE',
+        title: '¿Confirmas tu llegada al punto de recogida / tienda?',
         description:
-          'Se le notificará al cliente en tiempo real que estás en el lugar esperando el pedido o pasajero.',
-        badge: 'Paso 1: Llegada a Recogida',
+          'Se le notificará al cliente en tiempo real que estás en el lugar esperando el pedido.',
+        badge: 'Paso 1: Llegada a Tienda',
         iconType: 'shop',
       });
-    } else if (currentStatus === 'Llegué al comercio') {
+    } else if (targetNextStatus === 'PICKED_UP') {
       setStepConfirmModal({
-        nextStatus: 'Pedido recogido',
+        nextStatus: 'PICKED_UP',
         title: '¿Confirmas que ya tienes el pedido en mano?',
         description:
           'Verifica que todos los artículos estén completos e introducidos en la maleta antes de avanzar.',
         badge: 'Paso 2: Pedido Recogido',
         iconType: 'pickup',
       });
-    } else if (currentStatus === 'Pedido recogido') {
+    } else if (targetNextStatus === 'ARRIVED_AT_DESTINATION') {
       setStepConfirmModal({
-        nextStatus: 'En camino',
-        title: '¿Confirmas que vas en camino al destino?',
+        nextStatus: 'ARRIVED_AT_DESTINATION',
+        title: '¿Confirmas tu llegada afuera en el punto de entrega?',
         description:
-          'El cliente podrá ver tu avance hacia su ubicación en tiempo real sobre el mapa.',
-        badge: 'Paso 3: En Ruta al Destino',
+          'Se disparará automáticamente una alerta sonora y visual al cliente avisando que estás afuera.',
+        badge: 'Paso 3: Afuera en Destino',
         iconType: 'way',
       });
-    } else if (currentStatus === 'En camino') {
+    } else if (targetNextStatus === 'DELIVERED') {
       setStepConfirmModal({
-        nextStatus: 'Entregado',
+        nextStatus: 'DELIVERED',
         title: '¿Confirmas que la entrega fue completada?',
         description:
-          'Finalizará el servicio, tus ganancias se acreditarán de inmediato y se notificará al cliente.',
+          'Se activará automáticamente el modal en el cliente para confirmar la recepción y calificarte.',
         badge: 'Paso 4: Entrega Finalizada',
         iconType: 'delivered',
       });
@@ -289,18 +327,20 @@ export const DriverDashboard: React.FC = () => {
               {/* Chat In-App */}
               <button
                 type="button"
-                onClick={() => {
-                  setChatInitialTab('chat');
-                  setIsChatOpen(true);
-                }}
-                className="py-3 px-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-2xl flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all border border-slate-700"
-                title="Abrir minichat de la app"
+                onClick={() => handleOpenDriverChat('chat')}
+                className="relative py-3 px-2 bg-slate-800 hover:bg-slate-700 hover:scale-[1.02] text-white font-bold text-xs rounded-2xl flex flex-col items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all border border-slate-700 shadow-md"
+                title="Abrir chat del servicio"
               >
                 <div className="flex items-center gap-1">
                   <MessageSquare className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Chat App</span>
+                  <span>Chat</span>
                 </div>
                 <span className="text-[10px] text-slate-400">Mensajes</span>
+                {unreadChatCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-rose-600 text-white font-mono font-black text-[10px] flex items-center justify-center shadow-lg shadow-rose-600/50 border-2 border-slate-900 animate-bounce">
+                    {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                  </span>
+                )}
               </button>
             </div>
           </div>
@@ -362,106 +402,127 @@ export const DriverDashboard: React.FC = () => {
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
-              {/* Paso 1: Llegué al comercio */}
-              <button
-                type="button"
-                disabled={myActiveOrder.status !== 'Repartidor asignado'}
-                onClick={() => handleInitiateStepTransition('Repartidor asignado')}
-                className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
-                  myActiveOrder.status === 'Repartidor asignado'
-                    ? 'border-cyan-400 bg-gradient-to-r from-cyan-500 to-teal-500 text-slate-950 font-black shadow-lg shadow-cyan-500/30 active:scale-95 cursor-pointer ring-2 ring-cyan-300 animate-pulse'
-                    : myActiveOrder.status !== 'Buscando repartidor'
-                    ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
-                    : 'opacity-40 border-slate-800 cursor-not-allowed'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-wider block opacity-90">Paso 1</span>
-                  {myActiveOrder.status !== 'Repartidor asignado' && (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  )}
-                </div>
-                <span className="text-xs font-bold block leading-tight mt-1">Llegué al comercio</span>
-              </button>
+            {/* 4 BOTONES DE ACCIÓN SECUENCIAL DEL REPARTIDOR (ESTADOS ESTÁNDAR FIRESTORE) */}
+            {(() => {
+              const normStatus = normalizeOrderStatus(myActiveOrder.status);
 
-              {/* Paso 2: Pedido recogido */}
-              <button
-                type="button"
-                disabled={myActiveOrder.status !== 'Llegué al comercio'}
-                onClick={() => handleInitiateStepTransition('Llegué al comercio')}
-                className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
-                  myActiveOrder.status === 'Llegué al comercio'
-                    ? 'border-cyan-400 bg-gradient-to-r from-cyan-500 to-teal-500 text-slate-950 font-black shadow-lg shadow-cyan-500/30 active:scale-95 cursor-pointer ring-2 ring-cyan-300 animate-pulse'
-                    : myActiveOrder.status === 'Pedido recogido' ||
-                      myActiveOrder.status === 'En camino' ||
-                      myActiveOrder.status === 'Entregado'
-                    ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
-                    : 'opacity-40 border-slate-800 cursor-not-allowed'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-wider block opacity-90">Paso 2</span>
-                  {(myActiveOrder.status === 'Pedido recogido' ||
-                    myActiveOrder.status === 'En camino' ||
-                    myActiveOrder.status === 'Entregado') && (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  )}
-                </div>
-                <span className="text-xs font-bold block leading-tight mt-1">Pedido recogido</span>
-              </button>
+              return (
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Paso 1: ARRIVED_AT_STORE */}
+                  <button
+                    type="button"
+                    disabled={normStatus !== 'ACCEPTED'}
+                    onClick={() => handleInitiateStepTransition('ARRIVED_AT_STORE')}
+                    className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
+                      normStatus === 'ACCEPTED'
+                        ? 'border-cyan-400 bg-gradient-to-r from-cyan-500 to-teal-500 text-slate-950 font-black shadow-lg shadow-cyan-500/30 active:scale-95 cursor-pointer ring-2 ring-cyan-300 animate-pulse'
+                        : normStatus !== 'SEARCHING'
+                        ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
+                        : 'opacity-40 border-slate-800 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider block opacity-90 font-mono">Paso 1</span>
+                      {normStatus !== 'ACCEPTED' && normStatus !== 'SEARCHING' && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold block leading-tight mt-1">Llegué a la tienda</span>
+                  </button>
 
-              {/* Paso 3: En camino */}
-              <button
-                type="button"
-                disabled={myActiveOrder.status !== 'Pedido recogido'}
-                onClick={() => handleInitiateStepTransition('Pedido recogido')}
-                className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
-                  myActiveOrder.status === 'Pedido recogido'
-                    ? 'border-cyan-400 bg-gradient-to-r from-cyan-500 to-teal-500 text-slate-950 font-black shadow-lg shadow-cyan-500/30 active:scale-95 cursor-pointer ring-2 ring-cyan-300 animate-pulse'
-                    : myActiveOrder.status === 'En camino' || myActiveOrder.status === 'Entregado'
-                    ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
-                    : 'opacity-40 border-slate-800 cursor-not-allowed'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-wider block opacity-90">Paso 3</span>
-                  {(myActiveOrder.status === 'En camino' || myActiveOrder.status === 'Entregado') && (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  )}
-                </div>
-                <span className="text-xs font-bold block leading-tight mt-1">En camino</span>
-              </button>
+                  {/* Paso 2: PICKED_UP */}
+                  <button
+                    type="button"
+                    disabled={normStatus !== 'ARRIVED_AT_STORE'}
+                    onClick={() => handleInitiateStepTransition('PICKED_UP')}
+                    className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
+                      normStatus === 'ARRIVED_AT_STORE'
+                        ? 'border-cyan-400 bg-gradient-to-r from-cyan-500 to-teal-500 text-slate-950 font-black shadow-lg shadow-cyan-500/30 active:scale-95 cursor-pointer ring-2 ring-cyan-300 animate-pulse'
+                        : normStatus === 'PICKED_UP' ||
+                          normStatus === 'ARRIVED_AT_DESTINATION' ||
+                          normStatus === 'DELIVERED'
+                        ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
+                        : 'opacity-40 border-slate-800 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider block opacity-90 font-mono">Paso 2</span>
+                      {(normStatus === 'PICKED_UP' ||
+                        normStatus === 'ARRIVED_AT_DESTINATION' ||
+                        normStatus === 'DELIVERED') && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold block leading-tight mt-1">Pedido recogido</span>
+                  </button>
 
-              {/* Paso 4: Entregado / Finalizado */}
-              <button
-                type="button"
-                disabled={myActiveOrder.status !== 'En camino'}
-                onClick={() => handleInitiateStepTransition('En camino')}
-                className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
-                  myActiveOrder.status === 'En camino'
-                    ? 'border-emerald-400 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 text-slate-950 font-black shadow-xl shadow-emerald-500/40 active:scale-95 cursor-pointer ring-2 ring-emerald-300 animate-pulse'
-                    : myActiveOrder.status === 'Entregado'
-                    ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
-                    : 'opacity-40 border-slate-800 cursor-not-allowed'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-wider block opacity-90">Paso 4</span>
-                  {myActiveOrder.status === 'Entregado' && (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  )}
+                  {/* Paso 3: ARRIVED_AT_DESTINATION */}
+                  <button
+                    type="button"
+                    disabled={normStatus !== 'PICKED_UP'}
+                    onClick={() => handleInitiateStepTransition('ARRIVED_AT_DESTINATION')}
+                    className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
+                      normStatus === 'PICKED_UP'
+                        ? 'border-amber-400 bg-gradient-to-r from-amber-500 via-orange-400 to-yellow-400 text-slate-950 font-black shadow-lg shadow-amber-500/30 active:scale-95 cursor-pointer ring-2 ring-amber-300 animate-pulse'
+                        : normStatus === 'ARRIVED_AT_DESTINATION' || normStatus === 'DELIVERED'
+                        ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
+                        : 'opacity-40 border-slate-800 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider block opacity-90 font-mono">Paso 3</span>
+                      {(normStatus === 'ARRIVED_AT_DESTINATION' || normStatus === 'DELIVERED') && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold block leading-tight mt-1">Afuera en destino</span>
+                  </button>
+
+                  {/* Paso 4: DELIVERED */}
+                  <button
+                    type="button"
+                    disabled={normStatus !== 'ARRIVED_AT_DESTINATION'}
+                    onClick={() => handleInitiateStepTransition('DELIVERED')}
+                    className={`p-3.5 rounded-2xl border text-left transition-all relative overflow-hidden ${
+                      normStatus === 'ARRIVED_AT_DESTINATION'
+                        ? 'border-emerald-400 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 text-slate-950 font-black shadow-xl shadow-emerald-500/40 active:scale-95 cursor-pointer ring-2 ring-emerald-300 animate-pulse'
+                        : normStatus === 'DELIVERED'
+                        ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300 opacity-80'
+                        : 'opacity-40 border-slate-800 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-wider block opacity-90 font-mono">Paso 4</span>
+                      {normStatus === 'DELIVERED' && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold block leading-tight mt-1">Marcar Entregado</span>
+                  </button>
                 </div>
-                <span className="text-xs font-bold block leading-tight mt-1">Completar Entrega</span>
-              </button>
-            </div>
+              );
+            })()}
           </div>
+
+          {/* MENSAJE DE ESPERA DE CONFIRMACIÓN SI YA SE MARCÓ DELIVERED */}
+          {normalizeOrderStatus(myActiveOrder.status) === 'DELIVERED' && (
+            <div className="p-4 rounded-3xl bg-gradient-to-r from-emerald-950/90 to-teal-950/90 border border-emerald-500/50 text-center space-y-2 shadow-xl animate-in zoom-in-95">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h4 className="text-sm font-black text-white">¡Entrega Marcada como Completada!</h4>
+              <p className="text-xs text-slate-300 max-w-xs mx-auto">
+                El cliente ha recibido en su pantalla el modal de confirmación de recepción y valoración.
+              </p>
+            </div>
+          )}
 
           {/* REGLAS ESTRICTAS DE CANCELACIÓN DE VIAJE PARA EL REPARTIDOR */}
           {(() => {
+            const normStatus = normalizeOrderStatus(myActiveOrder.status);
             const isAfterPickup =
-              myActiveOrder.status === 'Pedido recogido' ||
-              myActiveOrder.status === 'En camino';
+              normStatus === 'PICKED_UP' ||
+              normStatus === 'ARRIVED_AT_DESTINATION';
             const isPendingRequest =
               myActiveOrder.cancellationRequest?.status === 'pending';
             const isRejectedRequest =

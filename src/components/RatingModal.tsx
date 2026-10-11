@@ -44,7 +44,7 @@ export const RatingModal: React.FC<RatingModalProps> = ({ order, isOpen, onClose
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-950/85 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-[94%] max-w-sm mx-auto bg-slate-900 rounded-3xl shadow-2xl border border-cyan-500/35 overflow-hidden">
+      <div className="w-[94%] max-w-sm mx-auto bg-slate-900 rounded-3xl shadow-2xl border border-cyan-500/35 overflow-hidden max-h-[85vh] overflow-y-auto">
         {submitted ? (
           <div className="p-7 text-center space-y-3">
             <div className="w-14 h-14 rounded-full bg-cyan-950 text-cyan-400 flex items-center justify-center mx-auto border border-cyan-500/40">

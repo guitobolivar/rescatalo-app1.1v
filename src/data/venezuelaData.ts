@@ -163,9 +163,9 @@ export const POPULAR_LOCATIONS: LocationPoint[] = [
 export const SERVICE_TYPES: ServiceType[] = [
   {
     id: 'rescate_moto',
-    name: 'Rescátalo Moto',
-    description: 'Transporte personal en motocicleta. Rápido, seguro y directo a tu destino.',
-    iconName: 'MotoPassenger',
+    name: 'Rescátalo Moto Taxi',
+    description: 'Transporte personal en moto taxi con casco incluido. Rápido, divertido y directo a tu destino.',
+    iconName: 'YellowMotoTaxi',
     baseMultiplier: 1.0,
     estimatedMinutes: 12,
     estimatedTimeText: '10 a 15 min',

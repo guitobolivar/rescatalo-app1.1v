@@ -7,7 +7,11 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   getDocs,
+  updateDoc,
+  addDoc,
+  serverTimestamp,
   onSnapshot,
   query,
   orderBy,
@@ -29,10 +33,12 @@ export { app, db, auth, firebaseConfig, isFirebaseConfigured, registerWithFireba
 // ============================================================================
 
 export const COLLECTIONS = {
-  ORDERS: 'rescatalo_orders',
-  DRIVER_LOCATIONS: 'rescatalo_driver_locations',
-  INCIDENTS: 'rescatalo_incidents',
-  NOTIFICATIONS: 'rescatalo_notifications',
+  ORDERS: 'orders',
+  DRIVERS: 'drivers',
+  DRIVER_LOCATIONS: 'driver_locations',
+  INCIDENTS: 'incidents',
+  NOTIFICATIONS: 'notifications',
+  USERS: 'users',
 } as const;
 
 /**
@@ -70,8 +76,7 @@ export const subscribeToFirestoreOrders = (
 
 /**
  * Sanitiza recursivamente objetos para Firestore:
- * Elimina claves con valor `undefined` (o las reemplaza por null si es necesario)
- * para evitar el error "Unsupported field value: undefined" en Firestore.
+ * Elimina claves con valor `undefined` (o las reemplaza por null)
  */
 export const sanitizeForFirestore = <T extends Record<string, any>>(obj: T): Record<string, any> => {
   if (obj === null || obj === undefined) return {};
@@ -79,7 +84,6 @@ export const sanitizeForFirestore = <T extends Record<string, any>>(obj: T): Rec
 
   for (const [key, value] of Object.entries(obj)) {
     if (value === undefined) {
-      // Omitir campo con valor undefined completamente
       continue;
     } else if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
       cleaned[key] = sanitizeForFirestore(value);
@@ -98,17 +102,16 @@ export const sanitizeForFirestore = <T extends Record<string, any>>(obj: T): Rec
 };
 
 /**
- * Guarda o actualiza un viaje en Firestore asegurando que ningún campo opcional
- * se envíe como undefined. Asigna null a los campos sin valor.
+ * Guarda o actualiza un viaje en Firestore asegurando persistencia real
  */
 export const saveFirestoreOrder = async (order: any): Promise<boolean> => {
   if (!db || !order?.id) return false;
   try {
     const docRef = doc(db, COLLECTIONS.ORDERS, order.id);
 
-    // Mapeo seguro con valores default o null para todos los campos opcionales del ciclo de vida del pedido
     const rawData = {
       ...order,
+      status: order.status || 'searching', // Garantizar estado base
       driverId: order.driverId ?? null,
       driverName: order.driverName ?? null,
       driverPhone: order.driverPhone ?? null,
@@ -129,35 +132,6 @@ export const saveFirestoreOrder = async (order: any): Promise<boolean> => {
       acceptedAt: order.acceptedAt ?? null,
       completedAt: order.completedAt ?? null,
       cancelledAt: order.cancelledAt ?? null,
-      cancelledBy: order.cancelledBy ?? null,
-      cancelReason: order.cancelReason ?? null,
-      ratingGiven: order.ratingGiven ? {
-        stars: order.ratingGiven.stars ?? null,
-        tags: Array.isArray(order.ratingGiven.tags) ? order.ratingGiven.tags : [],
-        comment: order.ratingGiven.comment ?? null,
-      } : null,
-      cancellationRequest: order.cancellationRequest ? {
-        requestedBy: order.cancellationRequest.requestedBy ?? null,
-        reason: order.cancellationRequest.reason ?? null,
-        timestamp: order.cancellationRequest.timestamp ?? null,
-        status: order.cancellationRequest.status ?? null,
-      } : null,
-      reportIncident: order.reportIncident ? {
-        id: order.reportIncident.id ?? null,
-        orderId: order.reportIncident.orderId ?? null,
-        clientId: order.reportIncident.clientId ?? null,
-        clientName: order.reportIncident.clientName ?? null,
-        clientPhone: order.reportIncident.clientPhone ?? null,
-        driverId: order.reportIncident.driverId ?? null,
-        driverName: order.reportIncident.driverName ?? null,
-        driverPhone: order.reportIncident.driverPhone ?? null,
-        serviceType: order.reportIncident.serviceType ?? null,
-        reason: order.reportIncident.reason ?? null,
-        details: order.reportIncident.details ?? null,
-        timestamp: order.reportIncident.timestamp ?? null,
-        status: order.reportIncident.status ?? null,
-        orderTotalUSD: order.reportIncident.orderTotalUSD ?? null,
-      } : null,
       updatedAt: Date.now(),
     };
 
@@ -172,7 +146,7 @@ export const saveFirestoreOrder = async (order: any): Promise<boolean> => {
 
 /**
  * Actualiza el estado del pedido cuando el repartidor acepta la orden en Firestore.
- * Asegura explícitamente omitir cualquier campo undefined o asignar null a campos opcionales sin valor.
+ * Notifica inmediatamente a la vista del cliente.
  */
 export const acceptFirestoreOrder = async (
   orderId: string,
@@ -182,69 +156,43 @@ export const acceptFirestoreOrder = async (
     driverPhone?: string | null;
     driverAvatar?: string | null;
     driverRating?: number | null;
-    driverVehicle?: {
-      type?: string | null;
-      model?: string | null;
-      plate?: string | null;
-      color?: string | null;
-    } | null;
-    driverPosition?: {
-      lat?: number | null;
-      lng?: number | null;
-      name?: string | null;
-      address?: string | null;
-    } | null;
+    driverVehicle?: any;
+    driverPosition?: any;
   }
 ): Promise<boolean> => {
   if (!db || !orderId) return false;
   try {
     const docRef = doc(db, COLLECTIONS.ORDERS, orderId);
 
-    const vehicleObj = driverData.driverVehicle ? {
-      type: driverData.driverVehicle.type ?? 'Moto',
-      model: driverData.driverVehicle.model ?? null,
-      plate: driverData.driverVehicle.plate ?? null,
-      color: driverData.driverVehicle.color ?? null,
-    } : null;
-
-    const positionObj = driverData.driverPosition ? {
-      lat: driverData.driverPosition.lat ?? null,
-      lng: driverData.driverPosition.lng ?? null,
-      name: driverData.driverPosition.name ?? null,
-      address: driverData.driverPosition.address ?? null,
-    } : null;
-
-    const updatePayload: Record<string, any> = {
-      status: 'Repartidor asignado',
+    const updatePayload = {
+      status: 'ACCEPTED',
+      statusText: 'Repartidor asignado',
       driverId: driverData.driverId ?? null,
       driverName: driverData.driverName ?? 'Repartidor',
       driverPhone: driverData.driverPhone ?? null,
       driverAvatar: driverData.driverAvatar ?? null,
       driverRating: driverData.driverRating ?? 5.0,
-      driverVehicle: vehicleObj,
-      driverPosition: positionObj,
+      driverVehicle: driverData.driverVehicle ?? null,
+      driverPosition: driverData.driverPosition ?? null,
       acceptedAt: Date.now(),
-      completedAt: null,
-      cancelledAt: null,
-      cancelledBy: null,
-      cancelReason: null,
-      ratingGiven: null,
-      cancellationRequest: null,
-      reportIncident: null,
       updatedAt: Date.now(),
     };
 
     const cleaned = sanitizeForFirestore(updatePayload);
-    await setDoc(docRef, cleaned, { merge: true });
+    try {
+      await updateDoc(docRef, cleaned);
+    } catch {
+      await setDoc(docRef, cleaned, { merge: true });
+    }
     return true;
   } catch (err) {
-    console.warn('Error al actualizar estado de orden aceptada en Firestore:', err);
+    console.warn('Error al aceptar orden en Firestore:', err);
     return false;
   }
 };
 
 /**
- * Actualiza parcialmente cualquier campo de una orden en Firestore omitiendo undefined
+ * Actualiza parcialmente cualquier campo de una orden en Firestore
  */
 export const updateFirestoreOrder = async (
   orderId: string,
@@ -257,13 +205,211 @@ export const updateFirestoreOrder = async (
       ...partialData,
       updatedAt: Date.now(),
     });
-    await setDoc(docRef, cleaned, { merge: true });
+    try {
+      await updateDoc(docRef, cleaned);
+    } catch {
+      await setDoc(docRef, cleaned, { merge: true });
+    }
     return true;
   } catch (err) {
     console.warn('Error actualizando orden en Firestore:', err);
     return false;
   }
 };
+
+/**
+ * Actualiza el campo "status" de la orden en Firestore usando updateDoc
+ * según el flujo requerido: "ARRIVED_AT_STORE", "PICKED_UP", "ARRIVED_AT_DESTINATION", "DELIVERED"
+ */
+export const updateOrderStatusDoc = async (
+  orderId: string,
+  status: string,
+  extraData: Record<string, any> = {}
+): Promise<boolean> => {
+  if (!db || !orderId) return false;
+  try {
+    const docRef = doc(db, COLLECTIONS.ORDERS, orderId);
+    const payload = sanitizeForFirestore({
+      status,
+      updatedAt: Date.now(),
+      ...extraData,
+    });
+    try {
+      await updateDoc(docRef, payload);
+    } catch {
+      await setDoc(docRef, payload, { merge: true });
+    }
+    return true;
+  } catch (err) {
+    console.warn('Error al actualizar estado con updateDoc en Firestore:', err);
+    return false;
+  }
+};
+
+/**
+ * Escucha un único pedido de Firestore en tiempo real para el cliente
+ */
+export const subscribeToSingleFirestoreOrder = (
+  orderId: string,
+  onOrderChanged: (order: any | null) => void,
+  onError?: (err: any) => void
+): Unsubscribe | null => {
+  if (!db || !orderId) return null;
+  try {
+    const orderDocRef = doc(db, COLLECTIONS.ORDERS, orderId);
+    return onSnapshot(
+      orderDocRef,
+      (snap) => {
+        if (snap.exists()) {
+          onOrderChanged({ id: snap.id, ...snap.data() });
+        } else {
+          onOrderChanged(null);
+        }
+      },
+      (err) => {
+        console.warn('Error listener pedido individual Firestore:', err);
+        onError?.(err);
+      }
+    );
+  } catch (err) {
+    console.warn('No se pudo establecer listener individual:', err);
+    return null;
+  }
+};
+
+/**
+ * Actualiza el perfil del repartidor en Firestore (colección "drivers" y "users")
+ * recalculando ratingAverage, totalRatings y la ponderación de prioridad
+ */
+export const updateDriverRatingAndPriority = async (
+  driverId: string,
+  ratingAverage: number,
+  totalRatings: number,
+  priorityWeight: number,
+  extra: Record<string, any> = {}
+): Promise<boolean> => {
+  if (!db || !driverId) return false;
+  try {
+    const payload = sanitizeForFirestore({
+      driverId,
+      ratingAverage,
+      totalRatings,
+      priorityWeight,
+      rating: ratingAverage,
+      ratingsCount: totalRatings,
+      updatedAt: Date.now(),
+      ...extra,
+    });
+
+    // Guardar en colección "drivers"
+    const driverRef = doc(db, COLLECTIONS.DRIVERS, driverId);
+    await setDoc(driverRef, payload, { merge: true });
+
+    // También reflejar en colección "users" para coherencia de autenticación
+    const userRef = doc(db, COLLECTIONS.USERS, driverId);
+    await setDoc(userRef, {
+      rating: ratingAverage,
+      ratingAverage,
+      totalRatings,
+      priorityWeight,
+      ratingsCount: totalRatings,
+      updatedAt: Date.now(),
+    }, { merge: true });
+
+    return true;
+  } catch (err) {
+    console.warn('Error actualizando calificación del repartidor en Firestore:', err);
+    return false;
+  }
+};
+
+/**
+ * Fase 3: Chat Privado en Tiempo Real (Cliente <-> Repartidor)
+ * Envía un mensaje a la subcolección `orders/{orderId}/messages`
+ * con campos text, senderId, createdAt (serverTimestamp())
+ */
+export const sendFirestoreOrderMessage = async (
+  orderId: string,
+  msg: {
+    text: string;
+    senderId: string;
+    senderName?: string;
+    senderRole?: string;
+  }
+): Promise<string | null> => {
+  if (!db || !orderId || !msg.text?.trim()) return null;
+  try {
+    const messagesCol = collection(db, COLLECTIONS.ORDERS, orderId, 'messages');
+    const docPayload = sanitizeForFirestore({
+      orderId,
+      text: msg.text.trim(),
+      senderId: msg.senderId,
+      senderName: msg.senderName || '',
+      senderRole: msg.senderRole || '',
+      createdAt: serverTimestamp(),
+      timestamp: Date.now(),
+    });
+
+    const docRef = await addDoc(messagesCol, docPayload);
+    return docRef.id;
+  } catch (err) {
+    console.warn('Error enviando mensaje a subcolección orders/{orderId}/messages:', err);
+    return null;
+  }
+};
+
+/**
+ * Fase 3: Escucha mensajes en tiempo real en la subcolección `orders/{orderId}/messages`
+ * ordenados por createdAt ascendente
+ */
+export const subscribeToFirestoreOrderMessages = (
+  orderId: string,
+  onMessages: (messages: any[]) => void,
+  onError?: (err: any) => void
+): Unsubscribe | null => {
+  if (!db || !orderId) return null;
+  try {
+    const messagesCol = collection(db, COLLECTIONS.ORDERS, orderId, 'messages');
+    const q = query(messagesCol, orderBy('createdAt', 'asc'));
+
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const msgs = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data();
+          const ts =
+            data.createdAt?.toMillis?.() ||
+            (data.createdAt?.seconds ? data.createdAt.seconds * 1000 : null) ||
+            data.timestamp ||
+            Date.now();
+
+          return {
+            id: docSnap.id,
+            orderId,
+            text: data.text || '',
+            senderId: data.senderId || '',
+            senderName: data.senderName || '',
+            senderRole: data.senderRole || 'client',
+            timestamp: ts,
+            createdAt: data.createdAt,
+          };
+        });
+        onMessages(msgs);
+      },
+      (error) => {
+        console.warn(`Error en listener de chat orders/${orderId}/messages:`, error);
+        onError?.(error);
+      }
+    );
+  } catch (err) {
+    console.warn('No se pudo establecer listener para subcolección de chat:', err);
+    return null;
+  }
+};
+
+// ============================================================================
+// GESTIÓN PERMANENTE DE USUARIOS EN FIRESTORE (CLIENTES, CONDUCTORES, MODERADOR)
+// ============================================================================
 
 /**
  * Escucha la colección de usuarios de Firestore en tiempo real
@@ -274,7 +420,7 @@ export const subscribeToFirestoreUsers = (
 ): Unsubscribe | null => {
   if (!db) return null;
   try {
-    const usersCol = collection(db, 'users');
+    const usersCol = collection(db, COLLECTIONS.USERS);
     return onSnapshot(
       usersCol,
       (snapshot) => {
@@ -293,14 +439,17 @@ export const subscribeToFirestoreUsers = (
 };
 
 /**
- * Guarda o actualiza un usuario en la colección users de Firestore
+ * Registra o guarda a un usuario de forma PERSISTENTE en Firestore.
+ * Esto evita que las cuentas se borren al recargar la página o al cambiar de PC a Móvil.
  */
 export const saveFirestoreUser = async (userId: string, data: any): Promise<boolean> => {
   if (!db || !userId) return false;
   try {
-    const userDocRef = doc(db, 'users', userId);
+    const userDocRef = doc(db, COLLECTIONS.USERS, userId);
     const cleaned = sanitizeForFirestore({
+      uid: userId,
       ...data,
+      role: data.role || 'client', // 'client', 'driver', o 'moderator'
       updatedAt: Date.now(),
     });
     await setDoc(userDocRef, cleaned, { merge: true });
@@ -312,8 +461,27 @@ export const saveFirestoreUser = async (userId: string, data: any): Promise<bool
 };
 
 /**
- * Escucha la ubicación geográfica dinámica del repartidor en tiempo real
+ * Obtiene el perfil de usuario directamente de Firestore por su ID
  */
+export const getFirestoreUser = async (userId: string): Promise<any | null> => {
+  if (!db || !userId) return null;
+  try {
+    const userDocRef = doc(db, COLLECTIONS.USERS, userId);
+    const docSnap = await getDoc(userDocRef);
+    if (docSnap.exists()) {
+      return { id: docSnap.id, ...docSnap.data() };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Error obteniendo usuario de Firestore:', err);
+    return null;
+  }
+};
+
+// ============================================================================
+// SEGUIMIENTO DE UBICACIÓN EN TIEMPO REAL Y REPORTES
+// ============================================================================
+
 export const subscribeToFirestoreDriverLocation = (
   orderId: string,
   onLocationUpdate: (pos: { lat: number; lng: number; heading?: number; speed?: number }) => void
@@ -341,9 +509,6 @@ export const subscribeToFirestoreDriverLocation = (
   }
 };
 
-/**
- * Actualiza la ubicación geográfica dinámica del repartidor en Firestore
- */
 export const updateFirestoreDriverLocation = async (
   orderId: string,
   location: { lat: number; lng: number; heading?: number; speed?: number; driverId?: string }
@@ -364,9 +529,6 @@ export const updateFirestoreDriverLocation = async (
   }
 };
 
-/**
- * Escucha y registra reportes de clientes hacia el moderador en tiempo real
- */
 export const subscribeToFirestoreIncidents = (
   onIncidentsChanged: (incidents: any[]) => void
 ): Unsubscribe | null => {

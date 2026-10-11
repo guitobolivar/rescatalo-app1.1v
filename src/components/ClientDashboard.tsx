@@ -8,8 +8,11 @@ import { UserProfileView } from './UserProfileView';
 import { InteractiveMap } from './InteractiveMap';
 import { ChatDrawer } from './ChatDrawer';
 import { RatingModal } from './RatingModal';
+import { DeliveryConfirmationModal } from './DeliveryConfirmationModal';
 import { CancelOrderModal } from './CancelOrderModal';
 import { ReportDriverModal } from './ReportDriverModal';
+import { normalizeOrderStatus, getOrderStatusText, Order } from '../types';
+import { subscribeToSingleFirestoreOrder } from '../services/firebase';
 import {
   MapPin,
   Package,
@@ -58,7 +61,9 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInitialTab, setChatInitialTab] = useState<'chat' | 'call'>('chat');
+  const [isDeliveryConfirmOpen, setIsDeliveryConfirmOpen] = useState(false);
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
+  const [orderToConfirm, setOrderToConfirm] = useState<Order | null>(null);
 
   // Real-time step change notification toast for client
   const [stepNotification, setStepNotification] = useState<{
@@ -67,31 +72,102 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
     type: 'assigned' | 'shop' | 'picked' | 'way' | 'delivered';
   } | null>(null);
 
+  // Unread messages count for active order
+  const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+
+  // Listener para mensajes no leídos del pedido activo
+  useEffect(() => {
+    if (!clientActiveOrder?.id) {
+      setUnreadChatCount(0);
+      return;
+    }
+
+    const unsub = subscribeToFirestoreOrderMessages(clientActiveOrder.id, (msgs) => {
+      if (isChatOpen) {
+        setUnreadChatCount(0);
+      } else {
+        // Contar mensajes enviados por el repartidor/contraparte
+        const incoming = msgs.filter((m) => m.senderId !== currentUser?.id);
+        const lastReadTimestamp = parseInt(localStorage.getItem(`rescatalo_chat_read_${clientActiveOrder.id}`) || '0', 10);
+        const unread = incoming.filter((m) => (m.timestamp || 0) > lastReadTimestamp).length;
+        setUnreadChatCount(unread);
+      }
+    });
+
+    return () => {
+      unsub?.();
+    };
+  }, [clientActiveOrder?.id, isChatOpen, currentUser?.id]);
+
+  const handleOpenClientChat = (tab: 'chat' | 'call' = 'chat') => {
+    if (clientActiveOrder?.id) {
+      localStorage.setItem(`rescatalo_chat_read_${clientActiveOrder.id}`, Date.now().toString());
+    }
+    setUnreadChatCount(0);
+    setChatInitialTab(tab);
+    setIsChatOpen(true);
+  };
+
   const prevStatusRef = useRef<string | null>(null);
 
   // Filter client orders strictly for current user or current active device session
   const clientActiveOrderId = typeof window !== 'undefined' ? localStorage.getItem('rescatalo_client_active_order_id') : null;
   const clientOrders = orders.filter((o) => o.clientId === currentUser?.id || o.id === clientActiveOrderId);
 
+  // Identificación del pedido activo del cliente (incluyendo entregado si aún no está valorado)
   const clientActiveOrder =
     (clientActiveOrderId
-      ? orders.find((o) => o.id === clientActiveOrderId && o.status !== 'Entregado' && o.status !== 'Cancelado')
+      ? orders.find(
+          (o) =>
+            o.id === clientActiveOrderId &&
+            normalizeOrderStatus(o.status) !== 'CANCELLED' &&
+            (!o.ratingGiven || normalizeOrderStatus(o.status) !== 'DELIVERED')
+        )
       : null) ||
-    (activeOrder && (activeOrder.clientId === currentUser?.id || activeOrder.id === clientActiveOrderId) && activeOrder.status !== 'Entregado' && activeOrder.status !== 'Cancelado'
+    (activeOrder &&
+    (activeOrder.clientId === currentUser?.id || activeOrder.id === clientActiveOrderId) &&
+    normalizeOrderStatus(activeOrder.status) !== 'CANCELLED' &&
+    (!activeOrder.ratingGiven || normalizeOrderStatus(activeOrder.status) !== 'DELIVERED')
       ? activeOrder
       : null) ||
-    clientOrders.find((o) => o.status !== 'Entregado' && o.status !== 'Cancelado') ||
+    clientOrders.find(
+      (o) =>
+        normalizeOrderStatus(o.status) !== 'CANCELLED' &&
+        (!o.ratingGiven || normalizeOrderStatus(o.status) !== 'DELIVERED')
+    ) ||
     null;
 
-  // Clean active order state when order is delivered or finished
+  // Listener onSnapshot en tiempo real del pedido en Firestore (actualización dinámica sin recargar)
   useEffect(() => {
-    if (clientActiveOrder && clientActiveOrder.status === 'Entregado') {
-      clearActiveOrderState();
-      setStepNotification(null);
-    }
-  }, [clientActiveOrder?.status, clearActiveOrderState]);
+    if (!clientActiveOrder?.id) return;
 
-  // Listen for real-time status transitions made by driver
+    const unsub = subscribeToSingleFirestoreOrder(clientActiveOrder.id, (orderSnap) => {
+      if (orderSnap && orderSnap.status) {
+        const norm = normalizeOrderStatus(orderSnap.status);
+        if (norm === 'DELIVERED' && !orderSnap.ratingGiven) {
+          setOrderToConfirm(orderSnap);
+          setIsDeliveryConfirmOpen(true);
+        }
+      }
+    });
+
+    return () => {
+      unsub?.();
+    };
+  }, [clientActiveOrder?.id]);
+
+  // Activación automática del modal de confirmación cuando el repartidor marca DELIVERED
+  useEffect(() => {
+    if (!clientActiveOrder) return;
+    const norm = normalizeOrderStatus(clientActiveOrder.status);
+
+    if (norm === 'DELIVERED' && !clientActiveOrder.ratingGiven) {
+      setOrderToConfirm(clientActiveOrder);
+      setIsDeliveryConfirmOpen(true);
+    }
+  }, [clientActiveOrder?.status, clientActiveOrder?.ratingGiven]);
+
+  // Monitoreo de transiciones de estado para alertas instantáneas (con sonido e icono)
   useEffect(() => {
     if (!clientActiveOrder) {
       prevStatusRef.current = null;
@@ -100,43 +176,48 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
 
     const currentStatus = clientActiveOrder.status;
     const prevStatus = prevStatusRef.current;
+    const currentNorm = normalizeOrderStatus(currentStatus);
+    const prevNorm = prevStatus ? normalizeOrderStatus(prevStatus) : null;
 
-    if (prevStatus && prevStatus !== currentStatus) {
-      if (currentStatus === 'Repartidor asignado') {
+    if (prevNorm && prevNorm !== currentNorm) {
+      if (currentNorm === 'ACCEPTED') {
         setStepNotification({
-          title: '¡Repartidor Asignado!',
+          title: '🛵 ¡Repartidor Asignado!',
           description: `${clientActiveOrder.driverName || 'Tu repartidor'} ha aceptado tu servicio y viene en camino.`,
           type: 'assigned',
         });
         playAlertChime('accepted');
-      } else if (currentStatus === 'Llegué al comercio') {
+      } else if (currentNorm === 'ARRIVED_AT_STORE') {
         setStepNotification({
-          title: '📍 ¡Repartidor en el Comercio / Punto!',
+          title: '📍 ¡Repartidor en la Tienda / Comercio!',
           description: `${clientActiveOrder.driverName || 'El repartidor'} ha llegado al lugar de recogida.`,
           type: 'shop',
         });
         playAlertChime('tap');
-      } else if (currentStatus === 'Pedido recogido') {
+      } else if (currentNorm === 'PICKED_UP') {
         setStepNotification({
           title: '📦 ¡Pedido Recogido!',
-          description: 'Tu pedido ya fue recogido e introducido en la maleta.',
+          description: 'Tu pedido ya fue recogido e inició el traslado hacia tu destino.',
           type: 'picked',
         });
         playAlertChime('tap');
-      } else if (currentStatus === 'En camino') {
+      } else if (currentNorm === 'ARRIVED_AT_DESTINATION') {
+        // Alerta mandatoria visual y sonora al llegar a la puerta
         setStepNotification({
-          title: '🛵 ¡Repartidor en Camino!',
-          description: 'El repartidor ya va en ruta directa hacia tu ubicación de entrega.',
+          title: '¡El Delivery ha llegado!',
+          description: 'El repartidor esta esperando, ve a recibir el pedido.',
           type: 'way',
         });
-        playAlertChime('tap');
-      } else if (currentStatus === 'Entregado') {
+        playAlertChime('incoming_order');
+      } else if (currentNorm === 'DELIVERED') {
         setStepNotification({
-          title: '🎉 ¡Servicio Entregado con Éxito!',
-          description: 'Tu pedido ha llegado a su destino final.',
+          title: '🎉 ¡Servicio Entregado!',
+          description: 'Tu pedido ha llegado. Por favor confirma la recepción en pantalla.',
           type: 'delivered',
         });
         playAlertChime('delivered');
+        setOrderToConfirm(clientActiveOrder);
+        setIsDeliveryConfirmOpen(true);
       }
 
       const timer = setTimeout(() => {
@@ -150,24 +231,17 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
     prevStatusRef.current = currentStatus;
   }, [clientActiveOrder?.status, clientActiveOrder?.driverName]);
 
-  // Rating modal upon delivery: check current active order or any unrated delivered order
+  // Si existe un pedido que necesita valoración pendiente
   const orderNeedingRating =
-    clientActiveOrder &&
-    clientActiveOrder.status === 'Entregado' &&
-    !clientActiveOrder.ratingGiven
-      ? clientActiveOrder
-      : orders.find(
-          (o) =>
-            o.clientId === currentUser?.id &&
-            o.status === 'Entregado' &&
-            !o.ratingGiven
-        ) || null;
-
-  useEffect(() => {
-    if (orderNeedingRating) {
-      setIsRatingModalOpen(true);
-    }
-  }, [orderNeedingRating?.id, orderNeedingRating?.status, orderNeedingRating?.ratingGiven]);
+    (orderToConfirm && normalizeOrderStatus(orderToConfirm.status) === 'DELIVERED' && !orderToConfirm.ratingGiven ? orderToConfirm : null) ||
+    (clientActiveOrder && normalizeOrderStatus(clientActiveOrder.status) === 'DELIVERED' && !clientActiveOrder.ratingGiven ? clientActiveOrder : null) ||
+    orders.find(
+      (o) =>
+        o.clientId === currentUser?.id &&
+        normalizeOrderStatus(o.status) === 'DELIVERED' &&
+        !o.ratingGiven
+    ) ||
+    null;
 
   return (
     <div className="w-full max-w-full overflow-x-hidden flex-1 flex flex-col p-4 pb-28 space-y-4">
@@ -283,34 +357,128 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
                       Estado del Servicio
                     </span>
                     <h3 className="text-lg font-black text-white mt-0.5">
-                      {clientActiveOrder.status}
+                      {getOrderStatusText(clientActiveOrder.status)}
                     </h3>
+                    <span className="text-[10px] text-slate-400 font-mono block">
+                      Código Firestore: <strong className="text-cyan-400">{clientActiveOrder.status}</strong>
+                    </span>
                   </div>
                   <span className="px-3 py-1 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30 font-mono text-xs font-black">
                     #{clientActiveOrder.id}
                   </span>
                 </div>
 
-                {/* Progress bar */}
-                <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-400 via-teal-300 to-emerald-400 transition-all duration-500"
-                    style={{
-                      width:
-                        clientActiveOrder.status === 'Buscando repartidor'
-                          ? '20%'
-                          : clientActiveOrder.status === 'Repartidor asignado'
-                          ? '40%'
-                          : clientActiveOrder.status === 'Llegué al comercio'
-                          ? '60%'
-                          : clientActiveOrder.status === 'Pedido recogido'
-                          ? '75%'
-                          : clientActiveOrder.status === 'En camino'
-                          ? '90%'
-                          : '100%',
-                    }}
-                  />
-                </div>
+                {/* Banner especial cuando el repartidor está afuera */}
+                {normalizeOrderStatus(clientActiveOrder.status) === 'ARRIVED_AT_DESTINATION' && (
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-yellow-500/20 border-2 border-amber-400 text-amber-200 flex items-center gap-3 animate-pulse">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 font-black">
+                      <Bike className="w-6 h-6 animate-bounce" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-white leading-tight">
+                        ¡Tu repartidor está afuera en la puerta!
+                      </h4>
+                      <p className="text-xs text-amber-300 mt-0.5">
+                        El conductor ha llegado al punto de entrega en Valle de la Pascua.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Creative Dynamic Status Bar - Changes Color on each status up to bright Emerald Green */}
+                {(() => {
+                  const s = normalizeOrderStatus(clientActiveOrder.status);
+                  const statusConfig = (() => {
+                    switch (s) {
+                      case 'SEARCHING':
+                        return {
+                          width: '18%',
+                          label: 'Radar Activo',
+                          barColor: 'from-sky-500 to-cyan-400',
+                          shadow: 'shadow-cyan-500/25',
+                          dotColor: 'bg-cyan-400',
+                          step: 1,
+                        };
+                      case 'ACCEPTED':
+                        return {
+                          width: '38%',
+                          label: 'Repartidor Asignado',
+                          barColor: 'from-cyan-500 via-teal-400 to-teal-300',
+                          shadow: 'shadow-teal-500/30',
+                          dotColor: 'bg-teal-400',
+                          step: 2,
+                        };
+                      case 'ARRIVED_AT_STORE':
+                        return {
+                          width: '58%',
+                          label: 'En Comercio / Recogida',
+                          barColor: 'from-teal-400 via-amber-400 to-amber-300',
+                          shadow: 'shadow-amber-500/30',
+                          dotColor: 'bg-amber-400',
+                          step: 3,
+                        };
+                      case 'PICKED_UP':
+                        return {
+                          width: '78%',
+                          label: 'En Camino a tu Destino',
+                          barColor: 'from-amber-400 via-emerald-400 to-teal-400',
+                          shadow: 'shadow-emerald-500/35',
+                          dotColor: 'bg-emerald-400',
+                          step: 4,
+                        };
+                      case 'ARRIVED_AT_DESTINATION':
+                        return {
+                          width: '92%',
+                          label: '¡Afuera en la Puerta!',
+                          barColor: 'from-emerald-400 via-lime-400 to-emerald-300',
+                          shadow: 'shadow-emerald-400/40',
+                          dotColor: 'bg-lime-400',
+                          step: 5,
+                        };
+                      case 'DELIVERED':
+                        return {
+                          width: '100%',
+                          label: '¡Entregado!',
+                          barColor: 'from-emerald-400 to-green-500',
+                          shadow: 'shadow-green-500/50',
+                          dotColor: 'bg-emerald-400',
+                          step: 6,
+                        };
+                      default:
+                        return {
+                          width: '30%',
+                          label: 'En Proceso',
+                          barColor: 'from-cyan-400 to-emerald-400',
+                          shadow: 'shadow-cyan-500/20',
+                          dotColor: 'bg-cyan-400',
+                          step: 2,
+                        };
+                    }
+                  })();
+
+                  return (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between text-[11px] font-mono">
+                        <span className="flex items-center gap-1.5 font-bold text-white">
+                          <span className={`w-2 h-2 rounded-full ${statusConfig.dotColor} animate-pulse`} />
+                          {statusConfig.label}
+                        </span>
+                        <span className="font-bold text-slate-400">
+                          Paso {statusConfig.step} de 6
+                        </span>
+                      </div>
+
+                      <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800/80 p-0.5 shadow-inner">
+                        <div
+                          className={`h-full bg-gradient-to-r ${statusConfig.barColor} rounded-full transition-all duration-700 ease-out shadow-lg ${statusConfig.shadow} relative overflow-hidden`}
+                          style={{ width: statusConfig.width }}
+                        >
+                          <div className="absolute inset-0 bg-white/20 animate-pulse pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Driver info card */}
@@ -345,25 +513,24 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
                     <button
                       type="button"
-                      onClick={() => {
-                        setChatInitialTab('call');
-                        setIsChatOpen(true);
-                      }}
-                      className="py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-xs active:scale-95 transition-all"
+                      onClick={() => handleOpenClientChat('call')}
+                      className="py-2.5 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 hover:scale-[1.02] active:scale-95 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-cyan-500/20 transition-all"
                     >
-                      <Phone className="w-4 h-4" />
-                      <span>Llamar Repartidor</span>
+                      <Phone className="w-4 h-4 stroke-[2.5]" />
+                      <span>Llamar</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setChatInitialTab('chat');
-                        setIsChatOpen(true);
-                      }}
-                      className="py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all border border-slate-700"
+                      onClick={() => handleOpenClientChat('chat')}
+                      className="relative py-2.5 bg-slate-800 hover:bg-slate-700 hover:scale-[1.02] active:scale-95 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all border border-slate-700 shadow-md"
                     >
                       <MessageSquare className="w-4 h-4 text-cyan-400" />
-                      <span>Abrir Chat</span>
+                      <span>Chat</span>
+                      {unreadChatCount > 0 && (
+                        <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-rose-600 text-white font-mono font-black text-[10px] flex items-center justify-center shadow-lg shadow-rose-600/50 border-2 border-slate-900 animate-bounce">
+                          {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                        </span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -576,17 +743,41 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
           onClose={() => setIsChatOpen(false)}
           order={clientActiveOrder}
           initialTab={chatInitialTab}
+          onMessagesRead={() => {
+            if (clientActiveOrder?.id) {
+              localStorage.setItem(`rescatalo_chat_read_${clientActiveOrder.id}`, Date.now().toString());
+            }
+            setUnreadChatCount(0);
+          }}
         />
       )}
 
-      {/* RATING MODAL */}
-      {orderNeedingRating && (
+      {/* DELIVERY CONFIRMATION MODAL (MANDATORIO FASE 2) */}
+      {(orderToConfirm || (clientActiveOrder && normalizeOrderStatus(clientActiveOrder.status) === 'DELIVERED')) && (
+        <DeliveryConfirmationModal
+          isOpen={isDeliveryConfirmOpen}
+          order={orderToConfirm || clientActiveOrder!}
+          onConfirmReception={() => {
+            setIsDeliveryConfirmOpen(false);
+            setIsRatingModalOpen(true);
+          }}
+          onReportProblem={() => {
+            setIsDeliveryConfirmOpen(false);
+            setIsReportModalOpen(true);
+          }}
+        />
+      )}
+
+      {/* RATING MODAL (VALORACIÓN Y PRIORIDAD DEL REPARTIDOR) */}
+      {(orderNeedingRating || orderToConfirm) && (
         <RatingModal
           isOpen={isRatingModalOpen}
-          order={orderNeedingRating}
+          order={orderNeedingRating || orderToConfirm!}
           onClose={() => {
             setIsRatingModalOpen(false);
+            setOrderToConfirm(null);
             clearActiveOrderState();
+            localStorage.removeItem('rescatalo_client_active_order_id');
             setClientView('home');
           }}
         />
@@ -597,17 +788,16 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({
         <CancelOrderModal
           isOpen={isCancelModalOpen}
           onClose={() => setIsCancelModalOpen(false)}
-          onConfirmCancel={(reason) => {
-            cancelOrder(clientActiveOrder.id, 'Cliente', reason);
-            clearActiveOrderState();
-            setClientView('home');
-            setIsCancelModalOpen(false);
-          }}
           orderId={clientActiveOrder.id}
           userRole="Cliente"
+          onConfirmCancel={(reason) => {
+            cancelOrder(clientActiveOrder.id, 'Cliente', reason);
+            setIsCancelModalOpen(false);
+            setClientView('home');
+          }}
         />
       )}
-
+  
       {/* REPORT DRIVER MODAL (VERIFICACIÓN DE PEDIDO / NO RECIBIDO O NO EN SITIO) */}
       {clientActiveOrder && (
         <ReportDriverModal

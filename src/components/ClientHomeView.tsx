@@ -13,7 +13,7 @@ import {
   Clock,
   ChevronRight,
 } from 'lucide-react';
-import { MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
+import { YellowMotoTaxiIcon, DeliveryBagIcon, MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
 import { GuideModal } from './GuideModal';
 
 interface ClientHomeViewProps {
@@ -181,42 +181,42 @@ export const ClientHomeView: React.FC<ClientHomeViewProps> = ({
           <button
             type="button"
             onClick={() => onSelectService('rescate_moto')}
-            className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-900 border border-emerald-500/40 hover:border-emerald-400 text-left transition-all cursor-pointer group active:scale-95 shadow-md shadow-emerald-950/20"
+            className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-900 border border-yellow-400/50 hover:border-yellow-300 text-left transition-all cursor-pointer group active:scale-95 shadow-md shadow-yellow-950/20"
           >
             <div className="flex items-center justify-between mb-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center">
-                <MotoPassengerIcon size={18} />
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-yellow-300 flex items-center justify-center p-1 border border-yellow-500/30">
+                <YellowMotoTaxiIcon size={24} />
               </div>
-              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30">
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-yellow-950 text-yellow-300 border border-yellow-500/30">
                 10-15 min
               </span>
             </div>
-            <h4 className="text-xs font-black text-white group-hover:text-emerald-300 transition-colors">
-              Rescátalo Moto
+            <h4 className="text-xs font-black text-white group-hover:text-yellow-300 transition-colors">
+              Rescátalo Moto Taxi
             </h4>
             <p className="text-[10px] text-slate-400 mt-0.5">
-              Transporte & Taxi rápido
+              Moto Taxi divertido & rápido
             </p>
           </button>
 
           <button
             type="button"
             onClick={() => onSelectService('rescate_delivery')}
-            className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-900 border border-cyan-500/40 hover:border-cyan-400 text-left transition-all cursor-pointer group active:scale-95 shadow-md shadow-cyan-950/20"
+            className="p-3.5 rounded-2xl bg-slate-950 hover:bg-slate-900 border border-emerald-500/50 hover:border-emerald-300 text-left transition-all cursor-pointer group active:scale-95 shadow-md shadow-emerald-950/20"
           >
             <div className="flex items-center justify-between mb-2">
-              <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-300 flex items-center justify-center">
-                <MotoDeliveryIcon size={18} />
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center p-1 border border-emerald-500/30">
+                <DeliveryBagIcon size={24} />
               </div>
-              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30">
                 10-15 min
               </span>
             </div>
-            <h4 className="text-xs font-black text-white group-hover:text-cyan-300 transition-colors">
-              Rescátalo Delivery
+            <h4 className="text-xs font-black text-white group-hover:text-emerald-300 transition-colors">
+              Rescátalo Mandados
             </h4>
             <p className="text-[10px] text-slate-400 mt-0.5">
-              Envíos y Encomiendas
+              Compras & Mandados seguros
             </p>
           </button>
         </div>

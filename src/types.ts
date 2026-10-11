@@ -50,6 +50,9 @@ export interface User {
   suspendedReason?: string | null;
   avatar?: string | null;
   rating?: number | null;
+  ratingAverage?: number | null;
+  totalRatings?: number | null;
+  priorityWeight?: number | null;
   ratingsCount?: number | null;
   ratingSum?: number | null;
   driverStats?: DriverStats | null;
@@ -70,6 +73,13 @@ export interface LocationPoint {
 }
 
 export type OrderStatus =
+  | 'ACCEPTED'
+  | 'ARRIVED_AT_STORE'
+  | 'PICKED_UP'
+  | 'ARRIVED_AT_DESTINATION'
+  | 'DELIVERED'
+  | 'SEARCHING'
+  | 'CANCELLED'
   | 'Buscando repartidor'
   | 'Repartidor asignado'
   | 'Llegué al comercio'
@@ -77,6 +87,41 @@ export type OrderStatus =
   | 'En camino'
   | 'Entregado'
   | 'Cancelado';
+
+export const normalizeOrderStatus = (status?: string | null): string => {
+  if (!status) return 'SEARCHING';
+  const s = status.toUpperCase().trim();
+  if (s === 'ACCEPTED' || s === 'REPARTIDOR ASIGNADO') return 'ACCEPTED';
+  if (s === 'ARRIVED_AT_STORE' || s === 'LLEGUÉ AL COMERCIO' || s === 'LLEGUE AL COMERCIO' || s === 'LLEGÓ A LA TIENDA') return 'ARRIVED_AT_STORE';
+  if (s === 'PICKED_UP' || s === 'PEDIDO RECOGIDO' || s === 'EN CAMINO') return 'PICKED_UP';
+  if (s === 'ARRIVED_AT_DESTINATION' || s === 'LLEGUÉ AL DESTINO' || s === 'LLEGUE AL DESTINO') return 'ARRIVED_AT_DESTINATION';
+  if (s === 'DELIVERED' || s === 'ENTREGADO') return 'DELIVERED';
+  if (s === 'CANCELLED' || s === 'CANCELADO') return 'CANCELLED';
+  if (s === 'SEARCHING' || s === 'BUSCANDO REPARTIDOR') return 'SEARCHING';
+  return status;
+};
+
+export const getOrderStatusText = (status?: string | null): string => {
+  const norm = normalizeOrderStatus(status);
+  switch (norm) {
+    case 'SEARCHING':
+      return 'Buscando repartidor';
+    case 'ACCEPTED':
+      return 'Repartidor asignado';
+    case 'ARRIVED_AT_STORE':
+      return 'Llegó a la tienda';
+    case 'PICKED_UP':
+      return 'Pedido recogido · En camino';
+    case 'ARRIVED_AT_DESTINATION':
+      return '¡Repartidor afuera en tu puerta!';
+    case 'DELIVERED':
+      return 'Entregado';
+    case 'CANCELLED':
+      return 'Cancelado';
+    default:
+      return status || 'Buscando repartidor';
+  }
+};
 
 export interface ServiceType {
   id: string;
@@ -173,9 +218,10 @@ export interface ChatMessage {
   orderId: string;
   senderId: string;
   senderName: string;
-  senderRole: UserRole;
+  senderRole?: UserRole;
   text: string;
   timestamp: number;
+  createdAt?: any;
 }
 
 export interface AppNotification {

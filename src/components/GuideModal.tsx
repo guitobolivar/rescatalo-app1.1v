@@ -163,9 +163,9 @@ export const GuideModal: React.FC<GuideModalProps> = ({
                   onClose();
                   onStartService('rescate_moto');
                 }}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-yellow-500/40 text-yellow-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
               >
-                <span>Pedir Moto</span>
+                <span>Moto Taxi</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
               <button
@@ -174,9 +174,9 @@ export const GuideModal: React.FC<GuideModalProps> = ({
                   onClose();
                   onStartService('rescate_delivery');
                 }}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-blue-500/20 hover:from-cyan-500/30 hover:to-blue-500/30 border border-cyan-500/40 text-cyan-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
               >
-                <span>Pedir Delivery</span>
+                <span>Mandados</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>

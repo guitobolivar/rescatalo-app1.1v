@@ -51,10 +51,14 @@ import {
   sanitizeForFirestore,
   saveFirestoreOrder,
   acceptFirestoreOrder,
+  updateOrderStatusDoc,
+  updateDriverRatingAndPriority,
+  sendFirestoreOrderMessage,
   subscribeToFirestoreOrders,
   subscribeToFirestoreUsers,
   saveFirestoreUser,
 } from '../services/firebase';
+import { normalizeOrderStatus, getOrderStatusText } from '../types';
 
 interface AppContextType {
   currentUser: User | null;
@@ -297,7 +301,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 } as User;
                 setCurrentUser(uData);
               } else {
-                const isOwnerEmail = ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(fbUser.email?.toLowerCase() || '');
+                const isOwnerEmail = ['julio.c.montero01@gmail.com'].includes(fbUser.email?.toLowerCase() || '');
                 const defaultRole: UserRole = isOwnerEmail ? 'admin' : 'client';
                 const defaultProfile: User = {
                   id: fbUser.uid,
@@ -653,7 +657,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const isAdmin =
     currentUser?.role === 'admin' ||
     currentUser?.role === 'Moderador' ||
-    ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(currentUser?.email?.toLowerCase() || '');
+    ['julio.c.montero01@gmail.com'].includes(currentUser?.email?.toLowerCase() || '');
 
   const isModerator = isAdmin;
 
@@ -761,7 +765,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
 
       if (!userData) {
-        const isOwnerEmail = ['recataloapp@gmail.com', 'guitobolivar@gmail.com', 'julio.c.montero01@gmail.com'].includes(trimmed);
+        const isOwnerEmail = ['julio.c.montero01@gmail.com'].includes(trimmed);
         userData = {
           id: fbUser.uid,
           name: fbUser.displayName || trimmed.split('@')[0],
@@ -1214,13 +1218,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const advanceOrderStatus = (orderId: string, nextStatus: OrderStatus) => {
     let updatedOrderObj: Order | null = null;
     let transitionNotif: AppNotification | null = null;
+    const norm = normalizeOrderStatus(nextStatus);
 
     setOrders((prev) =>
       prev.map((ord) => {
         if (ord.id === orderId) {
-          const isCompleted = nextStatus === 'Entregado';
+          const isCompleted = norm === 'DELIVERED';
           if (isCompleted) {
-            clearActiveOrderState();
             setDriverDailyEarningsUSD((e) => Math.round((e + ord.driverNetEarningsUSD) * 100) / 100);
             setDriverCompletedTrips((t) => t + 1);
 
@@ -1262,7 +1266,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               id: `notif-delivered-${Date.now()}`,
               userId: ord.clientId,
               title: '🎉 ¡Servicio Entregado!',
-              body: `Tu orden #${ord.id} ha sido completada con éxito en Valle de la Pascua.`,
+              body: `Tu orden #${ord.id} ha sido completada con éxito en Valle de la Pascua. Por favor confirma la recepción en tu pantalla.`,
               type: 'order_status',
               orderId: ord.id,
               timestamp: Date.now(),
@@ -1271,61 +1275,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
             playAlertChime('delivered');
           } else {
-            playAlertChime('tap');
-
-            if (nextStatus === 'Llegué al comercio') {
+            if (norm === 'ARRIVED_AT_STORE') {
+              playAlertChime('tap');
               transitionNotif = {
                 id: `notif-shop-${Date.now()}`,
                 userId: ord.clientId,
-                title: '📍 ¡Repartidor en el Punto de Recogida!',
-                body: `${ord.driverName || 'Tu repartidor'} ha llegado al lugar de recogida y espera tu paquete.`,
+                title: '📍 ¡Repartidor en la Tienda / Recogida!',
+                body: `${ord.driverName || 'Tu repartidor'} ha llegado al lugar de recogida y espera tu pedido.`,
                 type: 'order_status',
                 orderId: ord.id,
                 timestamp: Date.now(),
                 read: false,
               };
-            } else if (nextStatus === 'Pedido recogido') {
+            } else if (norm === 'PICKED_UP') {
+              playAlertChime('tap');
               transitionNotif = {
                 id: `notif-picked-${Date.now()}`,
                 userId: ord.clientId,
                 title: '📦 ¡Pedido Recogido por el Repartidor!',
-                body: 'El repartidor confirmó la recogida de tu paquete e inició el traslado.',
+                body: 'El repartidor confirmó la recogida de tu paquete e inició el traslado hacia tu destino.',
                 type: 'order_status',
                 orderId: ord.id,
                 timestamp: Date.now(),
                 read: false,
               };
-            } else if (nextStatus === 'En camino') {
+            } else if (norm === 'ARRIVED_AT_DESTINATION') {
+              // Dispara alerta al cliente al estar afuera en el punto de entrega
+              playAlertChime('incoming_order');
               transitionNotif = {
-                id: `notif-way-${Date.now()}`,
+                id: `notif-arrived-dest-${Date.now()}`,
                 userId: ord.clientId,
-                title: '🛵 ¡Repartidor en Camino!',
-                body: 'El repartidor ya va en ruta directa hacia la dirección de entrega.',
+                title: '¡El Delivery ha llegado!',
+                body: 'El repartidor esta esperando, ve a recibir el pedido.',
                 type: 'order_status',
                 orderId: ord.id,
                 timestamp: Date.now(),
                 read: false,
               };
+            } else {
+              playAlertChime('tap');
             }
           }
 
           const newPosition =
-            nextStatus === 'Llegué al comercio'
+            norm === 'ARRIVED_AT_STORE'
               ? { lat: ord.origin.lat, lng: ord.origin.lng, name: 'Repartidor en comercio', address: ord.origin.address || 'Punto de recogida' }
-              : nextStatus === 'Pedido recogido'
+              : norm === 'PICKED_UP'
               ? { lat: ord.origin.lat + 0.001, lng: ord.origin.lng + 0.001, name: 'Repartidor recogió pedido', address: 'En traslado' }
-              : nextStatus === 'En camino'
-              ? {
+              : norm === 'ARRIVED_AT_DESTINATION' || norm === 'DELIVERED'
+              ? { lat: ord.destination.lat, lng: ord.destination.lng, name: 'Repartidor en destino', address: ord.destination.address || 'Punto de entrega' }
+              : {
                   lat: (ord.origin.lat + ord.destination.lat) / 2,
                   lng: (ord.origin.lng + ord.destination.lng) / 2,
                   name: 'Repartidor en ruta',
                   address: 'En ruta a entrega',
-                }
-              : { lat: ord.destination.lat, lng: ord.destination.lng, name: 'Repartidor en destino', address: ord.destination.address || 'Punto de entrega' };
+                };
 
           const updated: Order = {
             ...ord,
-            status: nextStatus,
+            status: norm as OrderStatus,
             completedAt: isCompleted ? Date.now() : (ord.completedAt ?? null as any),
             driverPosition: newPosition,
           };
@@ -1337,11 +1345,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     );
 
-    // Sincronizar en tiempo real y emitir notificación push
+    // Actualiza en Firestore (colección "orders", campo "status") usando updateDoc
     if (updatedOrderObj) {
-      saveFirestoreOrder(updatedOrderObj).catch((e) =>
-        console.warn('Error guardando avance de estado en Firestore:', e)
-      );
+      updateOrderStatusDoc(orderId, norm, {
+        driverPosition: (updatedOrderObj as Order).driverPosition,
+        ...(norm === 'DELIVERED' ? { completedAt: Date.now() } : {}),
+      }).catch((e) => console.warn('Error guardando avance de estado en Firestore:', e));
+
       realtimeSync.broadcast({
         type: 'ORDER_UPSERT',
         order: updatedOrderObj,
@@ -1457,6 +1467,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Submit client rating & update driver performance rating average
+  // Submit client rating & update driver performance rating average and priority in Firestore
   const submitRating = (
     orderId: string,
     stars: number,
@@ -1469,7 +1480,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setOrders((prev) =>
       prev.map((ord) => {
         if (ord.id === orderId) {
-          const updated = {
+          const updated: Order = {
             ...ord,
             ratingGiven: { stars, tags, comment: comment || undefined },
           };
@@ -1480,30 +1491,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     );
 
-    if (updatedOrderWithRating) {
-      saveFirestoreOrder(updatedOrderWithRating).catch((e) =>
-        console.warn('Error guardando rating en Firestore:', e)
-      );
+    const nextStatus = targetOrder ? targetOrder.status : 'Entregado';
+    updateOrderStatusDoc(orderId, nextStatus, {
+      ratingGiven: { stars, tags, comment: comment || undefined },
+    }).catch((e) => console.warn('Error guardando rating en Firestore:', e));
+
+    if (targetOrder) {
       realtimeSync.broadcast({
         type: 'ORDER_UPSERT',
-        order: updatedOrderWithRating,
+        order: {
+          ...targetOrder,
+          ratingGiven: { stars, tags, comment: comment || undefined },
+        },
       });
     }
 
-    // Update driver's rating average and count
-    const driverId = targetOrder?.driverId || 'repartidor';
+    // Update driver's rating average and count in Firestore collections "drivers" and "users"
+    const driverId = targetOrder?.driverId || 'user-carlos-repartidor';
     setAllUsers((prevUsers) =>
       prevUsers.map((u) => {
         if (u.id === driverId) {
-          const oldCount = u.ratingsCount || u.driverStats?.ratingsCount || 10;
+          const oldCount = u.totalRatings || u.ratingsCount || u.driverStats?.ratingsCount || 10;
           const oldSum = u.ratingSum || u.driverStats?.ratingSum || (u.rating ? u.rating * oldCount : 49);
           const newCount = oldCount + 1;
           const newSum = oldSum + stars;
-          const newRating = Math.round((newSum / newCount) * 10) / 10;
+          const newRatingAverage = Math.round((newSum / newCount) * 10) / 10;
+          const priorityWeight = newRatingAverage >= 4.5 ? 100 : newRatingAverage >= 3.5 ? 70 : 40;
 
           const updatedUser: User = {
             ...u,
-            rating: newRating,
+            rating: newRatingAverage,
+            ratingAverage: newRatingAverage,
+            totalRatings: newCount,
+            priorityWeight,
             ratingsCount: newCount,
             ratingSum: newSum,
             driverStats: {
@@ -1513,7 +1533,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             },
           };
 
-          saveFirestoreUser(driverId, updatedUser).catch((e) =>
+          updateDriverRatingAndPriority(driverId, newRatingAverage, newCount, priorityWeight).catch((e) =>
             console.warn('Error actualizando rating de repartidor en Firestore:', e)
           );
 
@@ -1526,10 +1546,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       })
     );
 
+    // Notificar al repartidor sobre la valoración recibida y comentario si lo hubo
+    const starsStars = '⭐'.repeat(stars);
+    const driverRatingNotif: AppNotification = {
+      id: `notif-rating-${Date.now()}`,
+      userId: driverId,
+      title: `⭐ ¡Has recibido una valoración de ${stars} estrella${stars > 1 ? 's' : ''}!`,
+      body: comment?.trim()
+        ? `El cliente te calificó con ${stars} estrellas (${starsStars}) y dejó el comentario: "${comment.trim()}"`
+        : `El cliente te calificó con ${stars} estrellas (${starsStars}) por tu excelente servicio.`,
+      type: 'rating_received',
+      orderId,
+      timestamp: Date.now(),
+      read: false,
+    };
+
+    addNotification(driverRatingNotif);
+    realtimeSync.broadcast({
+      type: 'NOTIFICATION_DISPATCH',
+      notification: driverRatingNotif,
+    });
+
     playAlertChime('delivered');
   };
 
-  // Real-time Chat
+  // Fase 3: Real-time Chat en subcolección orders/{orderId}/messages
   const sendChatMessage = (orderId: string, text: string) => {
     if (!text.trim() || !currentUser) return;
     const newMsg: ChatMessage = {
@@ -1543,6 +1584,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     setChatMessages((prev) => [...prev, newMsg]);
+
+    // Persistir directamente en Firestore subcolección orders/{orderId}/messages
+    sendFirestoreOrderMessage(orderId, {
+      text: text.trim(),
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderRole: currentUser.role,
+    }).catch((e) => console.warn('Error guardando mensaje en Firestore subcolección:', e));
+
     playAlertChime('tap');
   };
 

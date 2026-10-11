@@ -1,13 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { Order, isClientRole } from '../types';
-import { Send, Phone, PhoneOff, Mic, MicOff, Volume2, X } from 'lucide-react';
+import { Order, isClientRole, ChatMessage } from '../types';
+import { Send, Phone, PhoneOff, Mic, MicOff, Volume2, X, Lock } from 'lucide-react';
+import {
+  subscribeToFirestoreOrderMessages,
+  sendFirestoreOrderMessage,
+} from '../services/firebase';
 
 interface ChatDrawerProps {
   order: Order;
   isOpen: boolean;
   onClose: () => void;
   initialTab?: 'chat' | 'call';
+  onMessagesRead?: () => void;
 }
 
 export const ChatDrawer: React.FC<ChatDrawerProps> = ({
@@ -15,19 +20,70 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
   isOpen,
   onClose,
   initialTab = 'chat',
+  onMessagesRead,
 }) => {
   const { currentUser, chatMessages, sendChatMessage } = useApp();
   const [inputText, setInputText] = useState('');
+  const [isSending, setIsSending] = useState(false);
   const [isCalling, setIsCalling] = useState(initialTab === 'call');
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
+  const [firestoreMessages, setFirestoreMessages] = useState<ChatMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const orderMessages = chatMessages.filter((m) => m.orderId === order.id);
+  // Marcar como leídos cuando el usuario abre el chat
+  useEffect(() => {
+    if (isOpen) {
+      onMessagesRead?.();
+    }
+  }, [isOpen, onMessagesRead]);
+
+  // 1. En el useEffect donde usas onSnapshot para escuchar la colección de mensajes (orders/{orderId}/messages),
+  // se incluye una función de limpieza (cleanup function) que cancela el listener anterior usando return () => unsubscribe();
+  useEffect(() => {
+    if (!isOpen || !order?.id) return;
+
+    const unsubscribe = subscribeToFirestoreOrderMessages(order.id, (remoteMsgs) => {
+      if (Array.isArray(remoteMsgs)) {
+        setFirestoreMessages(remoteMsgs);
+        onMessagesRead?.();
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, [isOpen, order?.id]);
+
+  // Desduplicación estricta por ID único de Firestore o local para evitar duplicados en la UI
+  const localOrderMessages = chatMessages.filter((m) => m.orderId === order.id);
+  const combinedMessagesMap = new Map<string, ChatMessage>();
+
+  firestoreMessages.forEach((m) => {
+    if (m.id) combinedMessagesMap.set(m.id, m);
+  });
+  // Solo agregar locales si no existen ya en Firestore
+  localOrderMessages.forEach((m) => {
+    if (m.id && !combinedMessagesMap.has(m.id)) {
+      // También evitar duplicado si ya hay un mensaje en Firestore con el mismo texto y timestamp muy similar
+      const isDuplicateText = firestoreMessages.some(
+        (fm) => fm.senderId === m.senderId && fm.text === m.text && Math.abs(fm.timestamp - m.timestamp) < 4000
+      );
+      if (!isDuplicateText) {
+        combinedMessagesMap.set(m.id, m);
+      }
+    }
+  });
+
+  const displayMessages = Array.from(combinedMessagesMap.values()).sort(
+    (a, b) => (a.timestamp || 0) - (b.timestamp || 0)
+  );
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [orderMessages]);
+  }, [displayMessages.length]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -43,11 +99,52 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSend = (e: React.FormEvent) => {
+  // 2. handleSendMessage con e.preventDefault(), bloqueo isSending y limpieza inmediata de inputText
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
-    sendChatMessage(order.id, inputText);
+    if (isSending) return;
+
+    const text = inputText.trim();
+    if (!text || !currentUser) return;
+
+    // Limpia el campo de texto inmediatamente al iniciar el envío
     setInputText('');
+    setIsSending(true);
+
+    try {
+      // 1. Envío a la subcolección de Firestore `orders/{orderId}/messages` con serverTimestamp()
+      await sendFirestoreOrderMessage(order.id, {
+        text,
+        senderId: currentUser.id,
+        senderName: currentUser.name,
+        senderRole: currentUser.role,
+      });
+      // 2. Despacho en memoria para sincronización auxiliar
+      sendChatMessage(order.id, text);
+    } catch (err) {
+      console.warn('Error guardando mensaje en Firestore subcolección:', err);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleQuickSend = async (quickText: string) => {
+    if (isSending || !currentUser) return;
+    setIsSending(true);
+
+    try {
+      await sendFirestoreOrderMessage(order.id, {
+        text: quickText,
+        senderId: currentUser.id,
+        senderName: currentUser.name,
+        senderRole: currentUser.role,
+      });
+      sendChatMessage(order.id, quickText);
+    } catch (err) {
+      console.warn('Error guardando mensaje rápido en Firestore:', err);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const formatCallTime = (secs: number) => {
@@ -174,8 +271,8 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
                 <button
                   key={quick}
                   type="button"
-                  onClick={() => sendChatMessage(order.id, quick)}
-                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-xl border border-cyan-500/20 whitespace-nowrap shrink-0 font-bold"
+                  onClick={() => handleQuickSend(quick)}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-xl border border-cyan-500/20 whitespace-nowrap shrink-0 font-bold active:scale-95 transition-transform"
                 >
                   {quick}
                 </button>
@@ -183,25 +280,37 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/60">
-              {orderMessages.map((msg) => {
-                const isMe = msg.senderId === currentUser?.id;
-                return (
-                  <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div
-                      className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                        isMe
-                          ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold rounded-tr-xs'
-                          : 'bg-slate-800 text-white border border-slate-700 rounded-tl-xs'
-                      }`}
-                    >
-                      <p>{msg.text}</p>
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-0.5 px-1 font-mono">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+              {displayMessages.length === 0 ? (
+                <div className="text-center py-12 text-slate-500 space-y-2">
+                  <div className="w-10 h-10 rounded-full bg-slate-800/80 flex items-center justify-center mx-auto text-cyan-400">
+                    <Lock className="w-4 h-4" />
                   </div>
-                );
-              })}
+                  <p className="text-xs font-bold text-slate-400">Chat 100% privado en tiempo real</p>
+                  <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                    Solo tú y tu contraparte asignada tienen acceso a este canal exclusivo.
+                  </p>
+                </div>
+              ) : (
+                displayMessages.map((msg) => {
+                  const isMe = msg.senderId === currentUser?.id;
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      <div
+                        className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                          isMe
+                            ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold rounded-tr-xs'
+                            : 'bg-slate-800 text-white border border-slate-700 rounded-tl-xs'
+                        }`}
+                      >
+                        <p>{msg.text}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-0.5 px-1 font-mono">
+                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -209,16 +318,22 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
               <input
                 type="text"
                 value={inputText}
+                disabled={isSending}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Escribe un mensaje claro..."
-                className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-400 placeholder:text-slate-500"
+                placeholder={isSending ? "Enviando mensaje..." : "Escribe un mensaje claro..."}
+                className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-400 placeholder:text-slate-500 disabled:opacity-60 transition-colors"
               />
               <button
                 type="submit"
-                disabled={!inputText.trim()}
-                className="w-10 h-10 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 flex items-center justify-center shrink-0 cursor-pointer shadow-md"
+                disabled={!inputText.trim() || isSending}
+                className="w-10 h-10 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 hover:scale-[1.04] active:scale-95 disabled:opacity-40 disabled:hover:scale-100 text-slate-950 flex items-center justify-center shrink-0 cursor-pointer shadow-lg shadow-cyan-500/20 transition-all"
+                title="Enviar mensaje"
               >
-                <Send className="w-4 h-4" />
+                {isSending ? (
+                  <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4 stroke-[2.5]" />
+                )}
               </button>
             </form>
           </>

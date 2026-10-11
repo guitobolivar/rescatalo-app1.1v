@@ -12,7 +12,7 @@ import {
   playAlertChime,
 } from '../data/venezuelaData';
 import { InteractiveMap } from './InteractiveMap';
-import { MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
+import { YellowMotoTaxiIcon, DeliveryBagIcon, MotoPassengerIcon, MotoDeliveryIcon } from './ServiceIcons';
 import {
   ArrowLeft,
   X,
@@ -736,48 +736,53 @@ export const ServiceRequestView: React.FC<ServiceRequestViewProps> = ({
               </span>
             </div>
 
-            {/* Nombre del servicio completo en bloque vertical limpio */}
-            <div className="flex items-center gap-3">
+            {/* Nombre del servicio completo en bloque vertical limpio y divertido */}
+            <div className="flex items-center gap-3.5">
               <div
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border ${
+                className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 border-2 shadow-lg transition-transform hover:scale-105 ${
                   isMoto
-                    ? 'bg-gradient-to-tr from-emerald-500/30 to-teal-400/20 text-emerald-300 border-emerald-400/50'
-                    : 'bg-gradient-to-tr from-cyan-500/30 to-blue-500/20 text-cyan-300 border-cyan-400/50'
+                    ? 'bg-gradient-to-tr from-amber-500/25 via-yellow-500/20 to-amber-400/10 text-yellow-300 border-yellow-400/60 shadow-yellow-500/20'
+                    : 'bg-gradient-to-tr from-emerald-500/25 via-teal-500/20 to-emerald-400/10 text-emerald-300 border-emerald-400/60 shadow-emerald-500/20'
                 }`}
               >
-                {isMoto ? <MotoPassengerIcon size={26} /> : <MotoDeliveryIcon size={26} />}
+                {isMoto ? <YellowMotoTaxiIcon size={34} /> : <DeliveryBagIcon size={34} />}
               </div>
 
               <div className="flex flex-col min-w-0 flex-1 whitespace-normal">
-                <h3 className="text-lg font-black tracking-tight leading-tight bg-gradient-to-r from-amber-200 via-emerald-300 to-cyan-300 bg-clip-text text-transparent break-words">
-                  {serviceConfig.name}
-                </h3>
-                <span className="text-[11px] font-bold text-slate-400 mt-0.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-black tracking-tight leading-tight bg-gradient-to-r from-yellow-300 via-amber-200 to-emerald-300 bg-clip-text text-transparent break-words">
+                    {serviceConfig.name}
+                  </h3>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                    {isMoto ? '🛵 Taxi' : '🛍️ Mandados'}
+                  </span>
+                </div>
+                <span className="text-xs font-semibold text-slate-300 mt-1">
                   {isMoto
-                    ? '1 Pasajero · Traslado seguro y rápido'
-                    : 'Envíos, compras del súper y paquetes'}
+                    ? 'Transporte rápido con casco en Valle de la Pascua'
+                    : 'Compras, encomiendas y paquetes a tu puerta'}
                 </span>
               </div>
             </div>
 
-            {/* Tarifa en color verde destacado */}
-            <div className="bg-slate-950/90 rounded-2xl p-3 border border-slate-800/80 flex items-baseline justify-between">
+            {/* Monto total en letras grandes y color verde divertido */}
+            <div className="bg-gradient-to-r from-emerald-950/70 via-slate-950 to-teal-950/70 rounded-2xl p-4 border-2 border-emerald-400/60 shadow-lg shadow-emerald-950/40 flex items-center justify-between">
               <div>
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                  Tarifa Final Calculada
+                <span className="text-xs font-black text-emerald-300 uppercase tracking-wider block">
+                  Total a Pagar:
                 </span>
-                <div className="text-2xl font-black font-mono text-emerald-400 tracking-tight drop-shadow-[0_2px_8px_rgba(52,211,153,0.35)] flex items-baseline gap-1 mt-0.5">
+                <div className="text-4xl font-black font-mono text-emerald-400 tracking-tight drop-shadow-[0_2px_12px_rgba(52,211,153,0.5)] flex items-baseline gap-1.5 mt-1">
                   ${calculatedFare.toFixed(2)}
-                  <span className="text-xs font-bold text-emerald-300/90 font-sans">USD</span>
+                  <span className="text-base font-black text-emerald-300 font-sans">USD</span>
                 </div>
               </div>
 
-              <div className="text-right">
-                <span className="text-[10px] font-mono text-slate-300 font-bold block">
+              <div className="text-right space-y-1">
+                <span className="text-xs font-mono text-emerald-300/80 font-bold block bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-500/30">
                   ${ratePerKm.toFixed(2)} / km
                 </span>
-                <span className="text-[10px] text-cyan-300 font-mono font-bold">
-                  {distanceKm.toFixed(1)} km trazados
+                <span className="text-[11px] text-cyan-300 font-mono font-bold block">
+                  {distanceKm.toFixed(1)} km calculados
                 </span>
               </div>
             </div>
